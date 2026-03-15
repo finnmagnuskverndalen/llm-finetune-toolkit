@@ -292,7 +292,7 @@ PARAMETER repeat_penalty {CFG.get('chat', {}).get('repetition_penalty', 1.1)}
 
 def list_quantizations():
     """Show available quantization options."""
-    table = Table(box=box.ROUNDED, title="Available Quantization Options", style="cyan")
+    table = table(box=box.ROUNDED, title="Available Quantization Options", style="cyan")
     table.add_column("Type", style="bold white")
     table.add_column("Description", style="dim white")
     for qtype, desc in QUANTIZATION_OPTIONS.items():

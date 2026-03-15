@@ -33,21 +33,27 @@ Interactive streaming chat with model switching between base and fine-tuned.
 
 ## Features
 
+- **Setup wizard** — detects your GPU, recommends a model, and generates a safe `config.yaml` in seconds
 - **Config-driven** — edit `config.yaml` to swap models, datasets, and hyperparameters without touching code
 - **Multi-model support** — Qwen 2.5, Phi-3.5, Gemma 2, Llama 3.2, SmolLM2 with auto-detected LoRA targets
 - **Low VRAM friendly** — 4-bit quantization (QLoRA) trains 0.5B models on a 2GB GPU
-- **Real-time dashboard** — live TUI showing loss curves, GPU/CPU/RAM usage, and training progress
+- **Real-time dashboard** — live TUI showing loss, GPU/CPU/RAM usage, and training progress
+- **OOM recovery** — crashes show exactly what to change in config instead of raw tracebacks
+- **GPU cleanup** — auto-detects stale GPU processes and offers to kill them on startup
+- **Graceful Ctrl+C** — interrupt training without losing progress
 - **Validation before training** — catches bad configs, shows token distributions, and estimates VRAM usage
 - **Eval split tracking** — monitors validation loss to detect overfitting
 - **Benchmark scoring** — composite 0-100 score with historical tracking to measure improvement over time
-- **Streaming chat** — interactive terminal chat with model switching, history management, and system monitoring
+- **Streaming chat** — interactive terminal chat with model switching, history, and `help` command
 - **Merge & export** — produce standalone models for deployment or HuggingFace Hub upload
 - **Ollama export** — one-command conversion to GGUF with auto-generated Modelfile and Ollama registration
 
 ## Project Structure
 ```
 llm-finetune-toolkit/
+├── setup.py           # Interactive setup wizard — run this first
 ├── config.yaml        # All hyperparameters and settings — edit this, not the code
+├── utils.py           # Shared utilities (config, model loading, data formatting, GPU cleanup)
 ├── finetune.py        # Training script with QLoRA, live dashboard, and eval tracking
 ├── chat.py            # Interactive streaming chat (base / finetuned / merged modes)
 ├── validate.py        # Pre-flight checks: config validation, data stats, memory estimates
@@ -69,30 +75,42 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### 2. Validate
+### 2. Setup (new!)
+```bash
+python3 setup.py
+```
+
+The wizard detects your GPU, shows compatible models, and generates a `config.yaml` tuned for your hardware. No more OOM guessing.
+
+For a fully automatic setup with no questions:
+```bash
+python3 setup.py --auto
+```
+
+### 3. Validate
 ```bash
 python3 validate.py
 ```
 
 Checks your config, loads datasets, shows token length distributions, and flags problems before you commit GPU time.
 
-### 3. Train
+### 4. Train
 ```bash
 python3 finetune.py
 ```
 
-The live dashboard shows training progress, loss, eval metrics, and system resource usage in real time.
+The live dashboard shows training progress, loss, eval metrics, and system resource usage in real time. If you hit Ctrl+C, it saves a checkpoint. If you run out of memory, it tells you exactly what to change.
 
-### 4. Chat
+### 5. Chat
 ```bash
 python3 chat.py              # Fine-tuned model
 python3 chat.py --base       # Base model for comparison
 python3 chat.py --merged     # Merged model (after running merge.py)
 ```
 
-Type `switch` during chat to toggle between models, `reset` to clear history, `quit` to exit.
+Commands during chat: `switch` to toggle models, `reset` to clear history, `help` for all commands, `status` for GPU/RAM info. Press Ctrl+C during generation to stop it without crashing.
 
-### 5. Benchmark
+### 6. Benchmark
 
 Run a benchmark and tag it with a description:
 ```bash
@@ -109,11 +127,8 @@ Each run produces a composite score (0-100) graded A+ through F, broken down int
 | Speed | 10 | Tokens/sec compared to base |
 | Consistency | 10 | Even performance across all categories |
 
-Prompts span 6 categories: factual, reasoning, instruction following, creative, conversational, and coding.
-
 After training more, benchmark again to track progress:
 ```bash
-# Train with more steps, then re-benchmark
 python3 benchmark.py --tag "200 steps lr=2e-5"
 python3 benchmark.py --tag "500 steps lr=1e-5"
 ```
@@ -131,29 +146,17 @@ Example output:
 3   2026-03-15 18:00  71.2    B+      +12.5 ↑    500 steps lr=1e-5  steps=500 lr=1e-05 r=16
 ```
 
-Each run stores the config snapshot, so you can see exactly which changes led to improvements or regressions.
-
-Other benchmark options:
-```bash
-python3 benchmark.py --quick           # Quick mode (4 prompts)
-python3 benchmark.py --prompts 5       # Custom number of prompts
-```
-
-### 6. Export & Merge
+### 7. Export & Merge
 ```bash
 python3 merge.py                          # Merge LoRA adapters into standalone model
 python3 merge.py --push username/my-model # Push to HuggingFace Hub
 ```
 
-### 7. Export to Ollama
-
-Convert your fine-tuned model to GGUF format and register it with Ollama in one command:
+### 8. Export to Ollama
 ```bash
 python3 export.py                          # Default: Q8_0 quantization + Ollama registration
 python3 export.py --quantize q4_k_m        # Smaller, faster (4-bit)
-python3 export.py --quantize f16           # Full precision (largest)
 python3 export.py --name my-assistant      # Custom Ollama model name
-python3 export.py --skip-ollama            # Only produce GGUF, don't register
 python3 export.py --list-quantizations     # Show all quantization options
 ```
 
@@ -162,47 +165,23 @@ Then run your fine-tuned model locally:
 ollama run qwen2.5-0.5b-instruct-finetuned
 ```
 
-Or use it via the Ollama API:
-```bash
-curl http://localhost:11434/api/chat -d '{
-  "model": "qwen2.5-0.5b-instruct-finetuned",
-  "messages": [{"role": "user", "content": "Hello!"}]
-}'
-```
-
 **Prerequisites for Ollama export:**
 ```bash
-# Install llama.cpp (for GGUF conversion)
 git clone https://github.com/ggml-org/llama.cpp.git
 pip3 install -r llama.cpp/requirements.txt --break-system-packages
-
-# Install Ollama
 curl -fsSL https://ollama.com/install.sh | sh
 ```
 
-**Available quantization levels:**
-
-| Type | Description |
-|------|-------------|
-| f16 | 16-bit float — large, near-original quality |
-| q8_0 | 8-bit — good balance of quality and size (default) |
-| q6_k | 6-bit — slightly smaller, minimal quality loss |
-| q5_k_m | 5-bit — smaller, good quality for most use cases |
-| q4_k_m | 4-bit — small and fast, some quality loss |
-| q4_0 | 4-bit — smallest practical, more quality loss |
-| q3_k_m | 3-bit — very small, noticeable quality loss |
-| q2_k | 2-bit — tiny, significant quality loss |
-
 ## Configuration
 
-Everything is controlled through `config.yaml`. Key settings:
+Everything is controlled through `config.yaml`. Run `python3 setup.py` to generate one automatically, or edit manually:
 
 ### Model
 ```yaml
 model:
-  name: "Qwen/Qwen2.5-0.5B-Instruct"    # HuggingFace model ID
-  output_dir: "./qwen-finetuned"          # Where adapters are saved
-  merged_dir: "./qwen-finetuned-merged"   # Where merged model is saved
+  name: "Qwen/Qwen2.5-0.5B-Instruct"
+  output_dir: "./qwen-finetuned"
+  merged_dir: "./qwen-finetuned-merged"
 ```
 
 **Supported models:**
@@ -222,48 +201,29 @@ model:
 ```yaml
 training:
   max_steps: -1              # Set to a number to override epochs (e.g., 50 for testing)
-  num_epochs: 2              # Full training epochs (used when max_steps is -1)
-  batch_size: 1              # Per-device batch size (lower = less VRAM)
-  gradient_accumulation_steps: 16  # Effective batch = batch_size × this
-  learning_rate: 2.0e-5      # Safe for small models — higher risks forgetting
-  max_grad_norm: 0.3         # Gradient clipping
-  neftune_noise_alpha: 5.0   # NEFTune noise for better generalization
-```
-
-### Datasets
-```yaml
-datasets:
-  - name: "timdettmers/openassistant-guanaco"
-    split: "train"
-    max_samples: 2500
-  - name: "yahma/alpaca-cleaned"
-    split: "train"
-    max_samples: 2500
-```
-
-Auto-detects format (Guanaco multi-turn, Alpaca instruction/output, or native messages). Add your own HuggingFace datasets — just follow one of these formats.
-
-### Data Filtering
-```yaml
-data:
-  max_length: 512            # Max sequence length in tokens (reduce for low VRAM)
-  max_assistant_chars: 1500  # Filter out overly long responses
-  min_assistant_chars: 20    # Filter out trivially short responses
-  eval_split: 0.05           # 5% held out for validation
+  num_epochs: 2
+  batch_size: 1              # Lower = less VRAM
+  gradient_accumulation_steps: 16
+  learning_rate: 2.0e-5
+  max_grad_norm: 0.3
+  neftune_noise_alpha: 5.0
 ```
 
 ## VRAM Troubleshooting
 
-If you hit `CUDA out of memory` errors:
+If you hit `CUDA out of memory` errors, the toolkit now shows specific fix suggestions. You can also re-run the setup wizard:
+```bash
+python3 setup.py
+```
 
-1. **Reduce `batch_size`** to `1` (compensate with higher `gradient_accumulation_steps`)
+Or manually in `config.yaml`:
+
+1. **Reduce `batch_size`** to `1`
 2. **Reduce `max_length`** — try `256` for 2GB GPUs
-3. **Kill other GPU processes** — `nvidia-smi` to find them, `sudo kill <PID>` to free memory
-4. **Try a smaller vocab model** — Qwen's 151K vocabulary creates large logit tensors; SmolLM2 (49K vocab) or Llama 3.2 (32K vocab) are more VRAM-friendly
+3. **Kill GPU processes** — the toolkit auto-detects these on startup
+4. **Try a smaller vocab model** — SmolLM2 (49K vocab) or Llama 3.2 (128K vocab) vs Qwen (151K vocab)
 
 ## Why Fine-tuned Models Get "Dumber"
-
-This toolkit was built specifically to solve catastrophic forgetting during fine-tuning. Common mistakes and their fixes:
 
 | Mistake | Effect | Fix in this toolkit |
 |---------|--------|---------------------|
@@ -277,10 +237,10 @@ This toolkit was built specifically to solve catastrophic forgetting during fine
 
 ## Workflow
 ```
-validate.py  →  finetune.py  →  benchmark.py  →  merge.py  →  export.py
-    ↑                ↓               ↓                            ↓
-    │            chat.py        --history                   ollama run
-    └──────── adjust config.yaml ─────────────────────────────────┘
+setup.py  →  validate.py  →  finetune.py  →  benchmark.py  →  merge.py  →  export.py
+                 ↑                ↓               ↓                            ↓
+                 │            chat.py        --history                   ollama run
+                 └──────── adjust config.yaml ─────────────────────────────────┘
 ```
 
 ## Requirements

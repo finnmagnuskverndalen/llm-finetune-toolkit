@@ -6,18 +6,17 @@ Run this BEFORE training to catch issues early:
   - Dataset loading and format detection
   - Token length distribution analysis
   - Memory estimation
+  - GPU availability check
   - Sample formatted examples
 
 Usage:
-    python validate.py                # Full validation
-    python validate.py --samples 3    # Show N formatted samples
+    python3 validate.py                # Full validation
+    python3 validate.py --samples 3    # Show N formatted samples
 """
 
 import argparse
-import yaml
 import torch
 from pathlib import Path
-from collections import Counter
 from transformers import AutoTokenizer
 from datasets import load_dataset, concatenate_datasets
 from rich.console import Console
@@ -25,21 +24,21 @@ from rich.table import Table
 from rich.panel import Panel
 from rich import box
 
-console = Console()
+from utils import load_config, detect_and_format, get_model_short_name
 
-CONFIG_PATH = Path(__file__).parent / "config.yaml"
-with open(CONFIG_PATH) as f:
-    CFG = yaml.safe_load(f)
+console = Console()
+CFG = load_config()
 
 
 def validate(show_samples=2):
     errors = []
     warnings = []
 
-    console.print(Panel("[bold]Pre-flight Validation[/bold]", border_style="cyan"))
+    model_name = get_model_short_name(CFG)
+    console.print(Panel(f"[bold]Pre-flight validation — {model_name}[/bold]", border_style="cyan"))
 
     # ── 1. Config checks ──
-    console.print("\n[bold cyan]1. Config Checks[/bold cyan]")
+    console.print("\n[bold cyan]1. Config checks[/bold cyan]")
 
     lr = CFG["training"]["learning_rate"]
     if lr > 5e-5:
@@ -69,56 +68,45 @@ def validate(show_samples=2):
         warnings.append("No gradient clipping — risk of catastrophic updates.")
     console.print(f"  Gradient clipping: {grad_norm or 'OFF'} {'[yellow]⚠[/yellow]' if not grad_norm else '[green]✓[/green]'}")
 
-    # ── 2. Tokenizer ──
-    console.print("\n[bold cyan]2. Tokenizer[/bold cyan]")
+    bs = CFG["training"]["batch_size"]
+    max_steps = CFG["training"].get("max_steps", -1)
+    console.print(f"  Batch size: {bs}")
+    if max_steps > 0:
+        console.print(f"  Max steps: {max_steps} (overrides epochs)")
+    else:
+        console.print(f"  Epochs: {CFG['training']['num_epochs']}")
+
+    # ── 2. GPU check ──
+    console.print("\n[bold cyan]2. Hardware[/bold cyan]")
+    if torch.cuda.is_available():
+        gpu_name = torch.cuda.get_device_properties(0).name
+        gpu_mem = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+        console.print(f"  GPU: [green]{gpu_name}[/green] ({gpu_mem:.1f} GB)")
+        if gpu_mem < 2.5:
+            warnings.append(f"GPU has only {gpu_mem:.1f} GB — use batch_size=1 and max_length=256.")
+    else:
+        console.print("  GPU: [red]not available — training on CPU (slow)[/red]")
+        warnings.append("No GPU detected. Training will be very slow.")
+
+    # ── 3. Tokenizer ──
+    console.print("\n[bold cyan]3. Tokenizer[/bold cyan]")
     model_id = CFG["model"]["name"]
     tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
-    console.print(f"  Loaded: {model_id}")
+    console.print(f"  Model: {model_id}")
     console.print(f"  Vocab size: {tokenizer.vocab_size}")
     console.print(f"  Chat template: {'[green]yes[/green]' if tokenizer.chat_template else '[red]no[/red]'}")
 
-    # ── 3. Datasets ──
-    console.print("\n[bold cyan]3. Datasets[/bold cyan]")
+    if tokenizer.vocab_size > 100000 and torch.cuda.is_available():
+        gpu_mem = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+        if gpu_mem < 4:
+            warnings.append(f"Large vocabulary ({tokenizer.vocab_size}) with small GPU ({gpu_mem:.1f}GB). "
+                            "The lm_head projection may OOM. Consider SmolLM2 or Llama 3.2 (smaller vocab).")
 
-    # Import format functions from finetune
-    import importlib.util
-    spec = importlib.util.spec_from_file_location("finetune", Path(__file__).parent / "finetune.py")
-    ft = importlib.util.module_from_spec(spec)
-
-    # We need the format functions but don't want to run main()
-    # So we'll inline lightweight versions
+    # ── 4. Datasets (uses shared format functions) ──
+    console.print("\n[bold cyan]4. Datasets[/bold cyan]")
     system_prompt = CFG["system_prompt"]
-
-    def detect_and_format(example):
-        if "text" in example and "### Human:" in str(example.get("text", "")):
-            text = example["text"]
-            turns = text.split("### Human:")[1:]
-            messages = [{"role": "system", "content": system_prompt}]
-            for turn in turns:
-                if "### Assistant:" not in turn:
-                    continue
-                parts = turn.split("### Assistant:", 1)
-                u = parts[0].strip()
-                a = parts[1].strip()
-                if u and a:
-                    messages.append({"role": "user", "content": u})
-                    messages.append({"role": "assistant", "content": a})
-            return {"messages": messages if len(messages) > 1 else None}
-        elif "instruction" in example and "output" in example:
-            inst = example.get("instruction", "")
-            inp = example.get("input", "")
-            out = example.get("output", "")
-            if not inst or not out:
-                return {"messages": None}
-            user_msg = f"{inst}\n{inp}".strip() if inp else inst
-            return {"messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_msg},
-                {"role": "assistant", "content": out},
-            ]}
-        return {"messages": None}
 
     all_datasets = []
     for ds_cfg in CFG["datasets"]:
@@ -128,7 +116,7 @@ def validate(show_samples=2):
         if max_s and max_s < len(ds):
             ds = ds.select(range(max_s))
 
-        ds = ds.map(detect_and_format)
+        ds = ds.map(lambda ex: detect_and_format(ex, system_prompt))
         before = len(ds)
         ds = ds.filter(lambda x: x["messages"] is not None and len(x["messages"]) >= 3)
         after = len(ds)
@@ -137,7 +125,6 @@ def validate(show_samples=2):
 
     combined = concatenate_datasets(all_datasets)
 
-    # Quality filter
     min_c = CFG["data"]["min_assistant_chars"]
     max_c = CFG["data"]["max_assistant_chars"]
     before = len(combined)
@@ -148,31 +135,25 @@ def validate(show_samples=2):
     after = len(combined)
     console.print(f"  After quality filter: {after}/{before} ({after/before*100:.0f}%)")
 
-    # ── 4. Token statistics ──
-    console.print("\n[bold cyan]4. Token Distribution[/bold cyan]")
+    # ── 5. Token statistics ──
+    console.print("\n[bold cyan]5. Token distribution[/bold cyan]")
 
     sample_size = min(1000, len(combined))
     sample = combined.select(range(sample_size))
 
     token_lengths = []
-    assistant_lengths = []
     for ex in sample:
         text = tokenizer.apply_chat_template(ex["messages"], tokenize=False)
         toks = tokenizer(text, truncation=False)["input_ids"]
         token_lengths.append(len(toks))
-        for m in ex["messages"]:
-            if m["role"] == "assistant":
-                a_toks = tokenizer(m["content"], truncation=False)["input_ids"]
-                assistant_lengths.append(len(a_toks))
 
     token_lengths.sort()
-    assistant_lengths.sort()
 
     def percentile(data, p):
         idx = int(len(data) * p / 100)
         return data[min(idx, len(data) - 1)]
 
-    stats_table = Table(box=box.SIMPLE, title="Full sequence token lengths")
+    stats_table = Table(box=box.SIMPLE, title="Token lengths")
     stats_table.add_column("Stat", style="bold")
     stats_table.add_column("Value", style="yellow")
     stats_table.add_row("Min", str(min(token_lengths)))
@@ -189,9 +170,9 @@ def validate(show_samples=2):
         warnings.append(f"{pct:.0f}% of samples will be truncated at max_length={max_len}.")
     console.print(f"  Truncated at {max_len}: {truncated}/{len(token_lengths)} ({pct:.1f}%)")
 
-    # ── 5. Show samples ──
+    # ── 6. Show samples ──
     if show_samples > 0:
-        console.print(f"\n[bold cyan]5. Sample Formatted Examples[/bold cyan]")
+        console.print(f"\n[bold cyan]6. Sample formatted examples[/bold cyan]")
         for i in range(min(show_samples, len(combined))):
             ex = combined[i]
             text = tokenizer.apply_chat_template(ex["messages"], tokenize=False)
@@ -202,37 +183,36 @@ def validate(show_samples=2):
                 border_style="dim",
             ))
 
-    # ── 6. Memory estimate ──
-    console.print(f"\n[bold cyan]6. Resource Estimate[/bold cyan]")
-    # Rough estimate for QLoRA
-    model_params = {
-        "0.5B": 0.5, "1.5B": 1.5, "2B": 2, "3B": 3, "7B": 7,
-    }
+    # ── 7. Resource estimate ──
+    console.print(f"\n[bold cyan]7. Resource estimate[/bold cyan]")
+    model_params = {"0.5B": 0.5, "1.5B": 1.5, "2B": 2, "3B": 3, "7B": 7}
     param_count = None
     for key, val in model_params.items():
         if key.lower() in model_id.lower():
             param_count = val
             break
     if param_count:
-        # 4-bit model + LoRA overhead + optimizer states
-        vram_est = param_count * 0.5 + 1.5  # Very rough: 0.5GB per B params for 4-bit + overhead
+        vram_est = param_count * 0.5 + 1.5
         console.print(f"  Estimated VRAM: ~{vram_est:.1f} GB (4-bit quantized)")
 
-    bs = CFG["training"]["batch_size"]
     ga = CFG["training"]["gradient_accumulation_steps"]
     epochs = CFG["training"]["num_epochs"]
     effective_bs = bs * ga
     steps = (after // effective_bs) * epochs
+    max_s = CFG["training"].get("max_steps", -1)
+    if max_s > 0:
+        steps = max_s
+
     console.print(f"  Effective batch size: {bs} × {ga} = {effective_bs}")
     console.print(f"  Estimated steps: ~{steps}")
-    console.print(f"  Dataset size: {after} examples × {epochs} epochs")
+    console.print(f"  Dataset: {after} examples × {epochs} epochs")
 
     # ── Summary ──
     console.print()
     if errors:
         console.print(Panel(
             "\n".join(f"[red]✗ {e}[/red]" for e in errors),
-            title="[red bold]ERRORS — Fix before training[/red bold]",
+            title="[red bold]Errors — fix before training[/red bold]",
             border_style="red",
         ))
     if warnings:
@@ -247,6 +227,9 @@ def validate(show_samples=2):
         console.print("[bold green]✓ No blockers. Review warnings above.[/bold green]")
     else:
         console.print("[bold red]✗ Fix errors above before training.[/bold red]")
+
+    console.print()
+    console.print("[dim]Next: python3 finetune.py[/dim]")
 
 
 if __name__ == "__main__":
