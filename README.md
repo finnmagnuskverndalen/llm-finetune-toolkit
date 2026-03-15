@@ -1,6 +1,6 @@
 # 🧠 LLM Fine-tuning Toolkit
 
-A config-driven toolkit for fine-tuning small language models (0.5B–3B parameters) using QLoRA, with a real-time training dashboard, interactive chat interface, and automated benchmarking.
+A config-driven toolkit for fine-tuning small language models (0.5B–3B parameters) using QLoRA, with a real-time training dashboard, interactive chat interface, automated benchmarking, and one-command export to Ollama.
 
 Built for running on consumer hardware — including GPUs with as little as 2GB VRAM.
 
@@ -42,6 +42,7 @@ Interactive streaming chat with model switching between base and fine-tuned.
 - **Benchmarking** — automated side-by-side comparison of base vs fine-tuned model with perplexity, speed, and repetition metrics
 - **Streaming chat** — interactive terminal chat with model switching, history management, and system monitoring
 - **Merge & export** — produce standalone models for deployment or HuggingFace Hub upload
+- **Ollama export** — one-command conversion to GGUF with auto-generated Modelfile and Ollama registration
 
 ## Project Structure
 ```
@@ -52,6 +53,7 @@ llm-finetune-toolkit/
 ├── validate.py        # Pre-flight checks: config validation, data stats, memory estimates
 ├── benchmark.py       # Automated base vs fine-tuned comparison with metrics
 ├── merge.py           # Merge LoRA adapters into standalone model for deployment
+├── export.py          # Convert to GGUF and register with Ollama
 ├── requirements.txt   # Python dependencies
 └── README.md
 ```
@@ -94,15 +96,71 @@ Type `switch` during chat to toggle between models, `reset` to clear history, `q
 ```bash
 python3 benchmark.py          # Full benchmark (12 prompts across 6 categories)
 python3 benchmark.py --quick  # Quick mode (4 prompts)
+python3 benchmark.py --prompts 5  # Custom number of prompts
 ```
 
-Runs identical prompts through both models and compares perplexity, tokens/sec, repetition ratio, and shows side-by-side outputs.
+Runs identical prompts through both models and compares:
+- **Perplexity** — how confident the model is (lower = better)
+- **Tokens/sec** — generation speed
+- **Repetition ratio** — coherence score (lower = less repetitive)
+- **Side-by-side outputs** — for manual quality inspection
+- **Per-category breakdown** — factual, reasoning, instruction, creative, conversational, coding
 
-### 6. Export
+Results are saved to `benchmark_results.json` for later analysis.
+
+### 6. Export & Merge
 ```bash
-python3 merge.py                          # Merge adapters into standalone model
+python3 merge.py                          # Merge LoRA adapters into standalone model
 python3 merge.py --push username/my-model # Push to HuggingFace Hub
 ```
+
+### 7. Export to Ollama
+
+Convert your fine-tuned model to GGUF format and register it with Ollama in one command:
+```bash
+python3 export.py                          # Default: Q8_0 quantization + Ollama registration
+python3 export.py --quantize q4_k_m        # Smaller, faster (4-bit)
+python3 export.py --quantize f16           # Full precision (largest)
+python3 export.py --name my-assistant      # Custom Ollama model name
+python3 export.py --skip-ollama            # Only produce GGUF, don't register
+python3 export.py --list-quantizations     # Show all quantization options
+```
+
+Then run your fine-tuned model locally:
+```bash
+ollama run qwen2.5-0.5b-instruct-finetuned
+```
+
+Or use it via the Ollama API:
+```bash
+curl http://localhost:11434/api/chat -d '{
+  "model": "qwen2.5-0.5b-instruct-finetuned",
+  "messages": [{"role": "user", "content": "Hello!"}]
+}'
+```
+
+**Prerequisites for Ollama export:**
+```bash
+# Install llama.cpp (for GGUF conversion)
+git clone https://github.com/ggml-org/llama.cpp.git
+pip3 install -r llama.cpp/requirements.txt --break-system-packages
+
+# Install Ollama
+curl -fsSL https://ollama.com/install.sh | sh
+```
+
+**Available quantization levels:**
+
+| Type | Description |
+|------|-------------|
+| f16 | 16-bit float — large, near-original quality |
+| q8_0 | 8-bit — good balance of quality and size (default) |
+| q6_k | 6-bit — slightly smaller, minimal quality loss |
+| q5_k_m | 5-bit — smaller, good quality for most use cases |
+| q4_k_m | 4-bit — small and fast, some quality loss |
+| q4_0 | 4-bit — smallest practical, more quality loss |
+| q3_k_m | 3-bit — very small, noticeable quality loss |
+| q2_k | 2-bit — tiny, significant quality loss |
 
 ## Configuration
 
@@ -188,9 +246,10 @@ This toolkit was built specifically to solve catastrophic forgetting during fine
 
 ## Workflow
 ```
-validate.py  →  finetune.py  →  chat.py / benchmark.py  →  merge.py
-    ↑                                    |
-    └────── adjust config.yaml ──────────┘
+validate.py  →  finetune.py  →  benchmark.py  →  merge.py  →  export.py
+    ↑                ↓                                            ↓
+    │            chat.py                                    ollama run
+    └──────── adjust config.yaml ─────────────────────────────────┘
 ```
 
 ## Requirements
@@ -198,6 +257,8 @@ validate.py  →  finetune.py  →  chat.py / benchmark.py  →  merge.py
 - Python 3.10+
 - NVIDIA GPU with CUDA support (2GB+ VRAM) or CPU (slower)
 - ~8GB RAM minimum
+- [Ollama](https://ollama.com) (optional, for local deployment)
+- [llama.cpp](https://github.com/ggml-org/llama.cpp) (optional, for GGUF conversion)
 
 ## License
 
