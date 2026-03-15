@@ -33,18 +33,20 @@ Interactive streaming chat with model switching between base and fine-tuned.
 
 ## Features
 
-- **Setup wizard** — detects your GPU, recommends a model, and generates a safe `config.yaml` in seconds
+- **Setup wizard** — detects your GPU, recommends a model and datasets, generates a safe `config.yaml` in seconds
 - **Config-driven** — edit `config.yaml` to swap models, datasets, and hyperparameters without touching code
-- **Multi-model support** — Qwen 2.5, Phi-3.5, Gemma 2, Llama 3.2, SmolLM2 with auto-detected LoRA targets
-- **Low VRAM friendly** — 4-bit quantization (QLoRA) trains 0.5B models on a 2GB GPU
+- **13+ supported models** — Qwen 2.5, Phi-3.5, Gemma 2, Llama 3.2, SmolLM v1/v2 with auto-detected LoRA targets
+- **Custom model support** — use any HuggingFace causal LM, not just the presets
+- **Dataset presets** — general assistant, conversational, instruction-following, code, or bring your own HuggingFace datasets
+- **Low VRAM friendly** — 4-bit quantization (QLoRA) trains 135M–3.8B models on GPUs with as little as 1GB VRAM
 - **Real-time dashboard** — live TUI showing loss, GPU/CPU/RAM usage, and training progress
 - **OOM recovery** — crashes show exactly what to change in config instead of raw tracebacks
 - **GPU cleanup** — auto-detects stale GPU processes and offers to kill them on startup
-- **Graceful Ctrl+C** — interrupt training without losing progress
+- **Graceful Ctrl+C** — interrupt training or generation without losing progress
 - **Validation before training** — catches bad configs, shows token distributions, and estimates VRAM usage
 - **Eval split tracking** — monitors validation loss to detect overfitting
 - **Benchmark scoring** — composite 0-100 score with historical tracking to measure improvement over time
-- **Streaming chat** — interactive terminal chat with model switching, history, and `help` command
+- **Streaming chat** — interactive terminal chat with model switching, history, and help command
 - **Merge & export** — produce standalone models for deployment or HuggingFace Hub upload
 - **Ollama export** — one-command conversion to GGUF with auto-generated Modelfile and Ollama registration
 
@@ -75,17 +77,48 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### 2. Setup (new!)
+### 2. Setup
 ```bash
 python3 setup.py
 ```
 
-The wizard detects your GPU, shows compatible models, and generates a `config.yaml` tuned for your hardware. No more OOM guessing.
+The wizard detects your GPU, shows compatible models, lets you pick a dataset preset (or add your own), and generates a `config.yaml` tuned for your hardware. No more OOM guessing.
 
 For a fully automatic setup with no questions:
 ```bash
 python3 setup.py --auto
 ```
+
+**Supported models (13+):**
+
+| Model | Params | Min VRAM |
+|-------|--------|----------|
+| HuggingFaceTB/SmolLM-135M-Instruct | 135M | ~1 GB |
+| HuggingFaceTB/SmolLM2-135M-Instruct | 135M | ~1 GB |
+| HuggingFaceTB/SmolLM-360M-Instruct | 360M | ~1 GB |
+| HuggingFaceTB/SmolLM2-360M-Instruct | 360M | ~1 GB |
+| Qwen/Qwen2.5-0.5B-Instruct | 0.5B | ~1.5 GB |
+| meta-llama/Llama-3.2-1B-Instruct | 1B | ~2 GB |
+| HuggingFaceTB/SmolLM-1.7B-Instruct | 1.7B | ~2.5 GB |
+| HuggingFaceTB/SmolLM2-1.7B-Instruct | 1.7B | ~2.5 GB |
+| Qwen/Qwen2.5-1.5B-Instruct | 1.5B | ~3 GB |
+| google/gemma-2-2b-it | 2B | ~3 GB |
+| Qwen/Qwen2.5-3B-Instruct | 3B | ~5 GB |
+| meta-llama/Llama-3.2-3B-Instruct | 3B | ~5 GB |
+| microsoft/Phi-3.5-mini-instruct | 3.8B | ~6 GB |
+
+Or enter `0` during setup to use any HuggingFace model ID.
+
+**Dataset presets:**
+
+| Preset | Description |
+|--------|-------------|
+| General assistant | OpenAssistant + Alpaca — broad conversational and instruction-following |
+| Conversational | OpenAssistant only — multi-turn chat focused |
+| Instruction following | Alpaca only — single-turn instruction/response pairs |
+| Code | Code Alpaca — coding instruction/response pairs |
+| Code + general | Code Alpaca + OpenAssistant — coding with general chat skills |
+| Custom | Enter your own HuggingFace dataset IDs |
 
 ### 3. Validate
 ```bash
@@ -99,7 +132,7 @@ Checks your config, loads datasets, shows token length distributions, and flags 
 python3 finetune.py
 ```
 
-The live dashboard shows training progress, loss, eval metrics, and system resource usage in real time. If you hit Ctrl+C, it saves a checkpoint. If you run out of memory, it tells you exactly what to change.
+The live dashboard shows training progress, loss, eval metrics, and system resource usage in real time. If you hit Ctrl+C, checkpoints are preserved. If you run out of memory, it tells you exactly what to change.
 
 ### 5. Chat
 ```bash
@@ -172,30 +205,22 @@ pip3 install -r llama.cpp/requirements.txt --break-system-packages
 curl -fsSL https://ollama.com/install.sh | sh
 ```
 
+**Available quantization levels:**
+
+| Type | Description |
+|------|-------------|
+| f16 | 16-bit float — large, near-original quality |
+| q8_0 | 8-bit — good balance of quality and size (default) |
+| q6_k | 6-bit — slightly smaller, minimal quality loss |
+| q5_k_m | 5-bit — smaller, good quality for most use cases |
+| q4_k_m | 4-bit — small and fast, some quality loss |
+| q4_0 | 4-bit — smallest practical, more quality loss |
+| q3_k_m | 3-bit — very small, noticeable quality loss |
+| q2_k | 2-bit — tiny, significant quality loss |
+
 ## Configuration
 
-Everything is controlled through `config.yaml`. Run `python3 setup.py` to generate one automatically, or edit manually:
-
-### Model
-```yaml
-model:
-  name: "Qwen/Qwen2.5-0.5B-Instruct"
-  output_dir: "./qwen-finetuned"
-  merged_dir: "./qwen-finetuned-merged"
-```
-
-**Supported models:**
-
-| Model | Params | Min VRAM (4-bit) |
-|-------|--------|------------------|
-| Qwen/Qwen2.5-0.5B-Instruct | 0.5B | ~2 GB |
-| Qwen/Qwen2.5-1.5B-Instruct | 1.5B | ~3 GB |
-| Qwen/Qwen2.5-3B-Instruct | 3B | ~5 GB |
-| meta-llama/Llama-3.2-1B-Instruct | 1B | ~2 GB |
-| meta-llama/Llama-3.2-3B-Instruct | 3B | ~5 GB |
-| google/gemma-2-2b-it | 2B | ~3 GB |
-| microsoft/Phi-3.5-mini-instruct | 3.8B | ~6 GB |
-| HuggingFaceTB/SmolLM2-1.7B-Instruct | 1.7B | ~3 GB |
+Everything is controlled through `config.yaml`. Run `python3 setup.py` to generate one automatically, or edit manually.
 
 ### Training
 ```yaml
@@ -207,6 +232,28 @@ training:
   learning_rate: 2.0e-5
   max_grad_norm: 0.3
   neftune_noise_alpha: 5.0
+```
+
+### Datasets
+```yaml
+datasets:
+  - name: "timdettmers/openassistant-guanaco"
+    split: "train"
+    max_samples: 2500
+  - name: "yahma/alpaca-cleaned"
+    split: "train"
+    max_samples: 2500
+```
+
+Auto-detects format (Guanaco multi-turn, Alpaca instruction/output, or native messages). Add any HuggingFace dataset — just follow one of these formats.
+
+### Data Filtering
+```yaml
+data:
+  max_length: 512            # Max sequence length in tokens (reduce for low VRAM)
+  max_assistant_chars: 1500  # Filter out overly long responses
+  min_assistant_chars: 20    # Filter out trivially short responses
+  eval_split: 0.05           # 5% held out for validation
 ```
 
 ## VRAM Troubleshooting
@@ -221,7 +268,7 @@ Or manually in `config.yaml`:
 1. **Reduce `batch_size`** to `1`
 2. **Reduce `max_length`** — try `256` for 2GB GPUs
 3. **Kill GPU processes** — the toolkit auto-detects these on startup
-4. **Try a smaller vocab model** — SmolLM2 (49K vocab) or Llama 3.2 (128K vocab) vs Qwen (151K vocab)
+4. **Try a smaller vocab model** — SmolLM (49K vocab) or Phi-3.5 (32K vocab) vs Qwen (151K vocab)
 
 ## Why Fine-tuned Models Get "Dumber"
 
@@ -246,7 +293,7 @@ setup.py  →  validate.py  →  finetune.py  →  benchmark.py  →  merge.py  
 ## Requirements
 
 - Python 3.10+
-- NVIDIA GPU with CUDA support (2GB+ VRAM) or CPU (slower)
+- NVIDIA GPU with CUDA support (1GB+ VRAM) or CPU (slower)
 - ~8GB RAM minimum
 - [Ollama](https://ollama.com) (optional, for local deployment)
 - [llama.cpp](https://github.com/ggml-org/llama.cpp) (optional, for GGUF conversion)
