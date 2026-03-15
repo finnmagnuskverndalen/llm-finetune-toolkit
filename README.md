@@ -1,6 +1,6 @@
 # 🧠 LLM Fine-tuning Toolkit
 
-A config-driven toolkit for fine-tuning small language models (0.5B–3B parameters) using QLoRA, with a real-time training dashboard, interactive chat interface, automated benchmarking, and one-command export to Ollama.
+A config-driven toolkit for fine-tuning small language models (0.5B–3B parameters) using QLoRA, with a real-time training dashboard, interactive chat interface, automated benchmarking with historical scoring, and one-command export to Ollama.
 
 Built for running on consumer hardware — including GPUs with as little as 2GB VRAM.
 
@@ -39,7 +39,7 @@ Interactive streaming chat with model switching between base and fine-tuned.
 - **Real-time dashboard** — live TUI showing loss curves, GPU/CPU/RAM usage, and training progress
 - **Validation before training** — catches bad configs, shows token distributions, and estimates VRAM usage
 - **Eval split tracking** — monitors validation loss to detect overfitting
-- **Benchmarking** — automated side-by-side comparison of base vs fine-tuned model with perplexity, speed, and repetition metrics
+- **Benchmark scoring** — composite 0-100 score with historical tracking to measure improvement over time
 - **Streaming chat** — interactive terminal chat with model switching, history management, and system monitoring
 - **Merge & export** — produce standalone models for deployment or HuggingFace Hub upload
 - **Ollama export** — one-command conversion to GGUF with auto-generated Modelfile and Ollama registration
@@ -51,7 +51,7 @@ llm-finetune-toolkit/
 ├── finetune.py        # Training script with QLoRA, live dashboard, and eval tracking
 ├── chat.py            # Interactive streaming chat (base / finetuned / merged modes)
 ├── validate.py        # Pre-flight checks: config validation, data stats, memory estimates
-├── benchmark.py       # Automated base vs fine-tuned comparison with metrics
+├── benchmark.py       # Scored benchmarking with historical tracking
 ├── merge.py           # Merge LoRA adapters into standalone model for deployment
 ├── export.py          # Convert to GGUF and register with Ollama
 ├── requirements.txt   # Python dependencies
@@ -93,20 +93,51 @@ python3 chat.py --merged     # Merged model (after running merge.py)
 Type `switch` during chat to toggle between models, `reset` to clear history, `quit` to exit.
 
 ### 5. Benchmark
+
+Run a benchmark and tag it with a description:
 ```bash
-python3 benchmark.py          # Full benchmark (12 prompts across 6 categories)
-python3 benchmark.py --quick  # Quick mode (4 prompts)
-python3 benchmark.py --prompts 5  # Custom number of prompts
+python3 benchmark.py --tag "50 steps lr=2e-5"
 ```
 
-Runs identical prompts through both models and compares:
-- **Perplexity** — how confident the model is (lower = better)
-- **Tokens/sec** — generation speed
-- **Repetition ratio** — coherence score (lower = less repetitive)
-- **Side-by-side outputs** — for manual quality inspection
-- **Per-category breakdown** — factual, reasoning, instruction, creative, conversational, coding
+Each run produces a composite score (0-100) graded A+ through F, broken down into five components:
 
-Results are saved to `benchmark_results.json` for later analysis.
+| Component | Max Points | What it measures |
+|-----------|-----------|------------------|
+| Perplexity | 35 | Confidence improvement over base model |
+| Coherence | 25 | Low repetition in responses |
+| Response quality | 20 | Length, structure, vocabulary richness |
+| Speed | 10 | Tokens/sec compared to base |
+| Consistency | 10 | Even performance across all categories |
+
+Prompts span 6 categories: factual, reasoning, instruction following, creative, conversational, and coding.
+
+After training more, benchmark again to track progress:
+```bash
+# Train with more steps, then re-benchmark
+python3 benchmark.py --tag "200 steps lr=2e-5"
+python3 benchmark.py --tag "500 steps lr=1e-5"
+```
+
+View your score history and trends over time:
+```bash
+python3 benchmark.py --history
+```
+
+Example output:
+```
+#   Date              Score   Grade   Trend      Tag                Config
+1   2026-03-15 15:30  42.3    C       —          50 steps lr=2e-5   steps=50 lr=2e-05 r=16
+2   2026-03-15 16:45  58.7    C+      +16.4 ↑    200 steps lr=2e-5  steps=200 lr=2e-05 r=16
+3   2026-03-15 18:00  71.2    B+      +12.5 ↑    500 steps lr=1e-5  steps=500 lr=1e-05 r=16
+```
+
+Each run stores the config snapshot, so you can see exactly which changes led to improvements or regressions.
+
+Other benchmark options:
+```bash
+python3 benchmark.py --quick           # Quick mode (4 prompts)
+python3 benchmark.py --prompts 5       # Custom number of prompts
+```
 
 ### 6. Export & Merge
 ```bash
@@ -247,8 +278,8 @@ This toolkit was built specifically to solve catastrophic forgetting during fine
 ## Workflow
 ```
 validate.py  →  finetune.py  →  benchmark.py  →  merge.py  →  export.py
-    ↑                ↓                                            ↓
-    │            chat.py                                    ollama run
+    ↑                ↓               ↓                            ↓
+    │            chat.py        --history                   ollama run
     └──────── adjust config.yaml ─────────────────────────────────┘
 ```
 
