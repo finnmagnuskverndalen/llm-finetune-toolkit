@@ -1,0 +1,37 @@
+# Model outputs
+qwen-finetuned/
+qwen-finetuned-merged/
+*-finetuned/
+*-finetuned-merged/
+
+# Benchmark results
+benchmark_results.json
+
+# Cache
+cache/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# HuggingFace cache
+.cache/
