@@ -51,14 +51,19 @@ def detect_ram():
 # ── Model recommendations based on VRAM ──
 
 MODELS = [
-    {"name": "Qwen/Qwen2.5-0.5B-Instruct",          "params": "0.5B", "min_vram": 1.5, "vocab": "151K"},
-    {"name": "meta-llama/Llama-3.2-1B-Instruct",     "params": "1B",   "min_vram": 2.0, "vocab": "128K"},
-    {"name": "HuggingFaceTB/SmolLM2-1.7B-Instruct",  "params": "1.7B", "min_vram": 2.5, "vocab": "49K"},
-    {"name": "Qwen/Qwen2.5-1.5B-Instruct",           "params": "1.5B", "min_vram": 3.0, "vocab": "151K"},
-    {"name": "google/gemma-2-2b-it",                  "params": "2B",   "min_vram": 3.0, "vocab": "256K"},
-    {"name": "Qwen/Qwen2.5-3B-Instruct",             "params": "3B",   "min_vram": 5.0, "vocab": "151K"},
-    {"name": "meta-llama/Llama-3.2-3B-Instruct",     "params": "3B",   "min_vram": 5.0, "vocab": "128K"},
-    {"name": "microsoft/Phi-3.5-mini-instruct",       "params": "3.8B", "min_vram": 6.0, "vocab": "32K"},
+    {"name": "HuggingFaceTB/SmolLM-135M-Instruct",       "params": "135M", "min_vram": 1.0, "vocab": "49K"},
+    {"name": "HuggingFaceTB/SmolLM-360M-Instruct",       "params": "360M", "min_vram": 1.0, "vocab": "49K"},
+    {"name": "Qwen/Qwen2.5-0.5B-Instruct",               "params": "0.5B", "min_vram": 1.5, "vocab": "151K"},
+    {"name": "HuggingFaceTB/SmolLM2-135M-Instruct",      "params": "135M", "min_vram": 1.0, "vocab": "49K"},
+    {"name": "HuggingFaceTB/SmolLM2-360M-Instruct",      "params": "360M", "min_vram": 1.0, "vocab": "49K"},
+    {"name": "meta-llama/Llama-3.2-1B-Instruct",         "params": "1B",   "min_vram": 2.0, "vocab": "128K"},
+    {"name": "HuggingFaceTB/SmolLM-1.7B-Instruct",       "params": "1.7B", "min_vram": 2.5, "vocab": "49K"},
+    {"name": "HuggingFaceTB/SmolLM2-1.7B-Instruct",      "params": "1.7B", "min_vram": 2.5, "vocab": "49K"},
+    {"name": "Qwen/Qwen2.5-1.5B-Instruct",               "params": "1.5B", "min_vram": 3.0, "vocab": "151K"},
+    {"name": "google/gemma-2-2b-it",                      "params": "2B",   "min_vram": 3.0, "vocab": "256K"},
+    {"name": "Qwen/Qwen2.5-3B-Instruct",                 "params": "3B",   "min_vram": 5.0, "vocab": "151K"},
+    {"name": "meta-llama/Llama-3.2-3B-Instruct",         "params": "3B",   "min_vram": 5.0, "vocab": "128K"},
+    {"name": "microsoft/Phi-3.5-mini-instruct",           "params": "3.8B", "min_vram": 6.0, "vocab": "32K"},
 ]
 
 
@@ -158,6 +163,7 @@ def run_wizard(auto=False):
         )
 
     console.print(model_table)
+    console.print(f"  [dim]Or enter 0 to use a custom HuggingFace model[/dim]")
 
     # ── Choose model ──
     if auto:
@@ -169,10 +175,20 @@ def run_wizard(auto=False):
 
         try:
             choice = IntPrompt.ask(
-                "  Choose model number",
+                "  Choose model number (0 for custom)",
                 default=default_idx,
             )
-            if 1 <= choice <= len(MODELS):
+            if choice == 0:
+                custom_id = Prompt.ask("  Enter HuggingFace model ID (e.g., user/model-name)")
+                custom_id = custom_id.strip()
+                if custom_id:
+                    chosen = {"name": custom_id, "params": "?", "min_vram": 0, "vocab": "?"}
+                    console.print(f"  [green]Using custom model: {custom_id}[/green]")
+                    console.print(f"  [dim]Make sure it's a causal LM with a chat template.[/dim]")
+                else:
+                    console.print("[yellow]  No model entered, using default[/yellow]")
+                    chosen = safe["model"]
+            elif 1 <= choice <= len(MODELS):
                 chosen = MODELS[choice - 1]
                 if vram > 0 and chosen["min_vram"] > vram:
                     console.print(f"[yellow]  Warning: {chosen['name']} needs {chosen['min_vram']}GB, you have {vram}GB[/yellow]")
