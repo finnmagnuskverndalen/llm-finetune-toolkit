@@ -1,14 +1,21 @@
 # Model outputs
 qwen-finetuned/
 qwen-finetuned-merged/
+qwen-finetuned-gguf/
 *-finetuned/
 *-finetuned-merged/
+*-finetuned-gguf/
 
-# Benchmark results
+# Benchmark results (keep history, ignore per-run dump)
 benchmark_results.json
+
+# GGUF models
+*.gguf
+Modelfile
 
 # Cache
 cache/
+llama.cpp/
 
 # Python
 __pycache__/
