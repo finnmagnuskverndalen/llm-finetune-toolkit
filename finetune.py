@@ -240,72 +240,8 @@ def detect_target_modules(model):
 
 
 # ── Data Pipeline ────────────────────────────────────────────
-
-def format_guanaco(example, system_prompt):
-    """Parse ### Human: / ### Assistant: multi-turn format."""
-    text = example.get("text", "")
-    if "### Human:" not in text:
-        return {"messages": None}
-
-    turns = text.split("### Human:")[1:]
-    messages = [{"role": "system", "content": system_prompt}]
-
-    for turn in turns:
-        if "### Assistant:" not in turn:
-            continue
-        parts = turn.split("### Assistant:", 1)
-        user_content = parts[0].strip()
-        assistant_content = parts[1].strip()
-        if user_content and assistant_content:
-            messages.append({"role": "user", "content": user_content})
-            messages.append({"role": "assistant", "content": assistant_content})
-
-    if len(messages) <= 1:
-        return {"messages": None}
-    return {"messages": messages}
-
-
-def format_alpaca(example, system_prompt):
-    """Parse instruction / input / output format."""
-    instruction = example.get("instruction", "")
-    inp = example.get("input", "")
-    output = example.get("output", "")
-
-    if not instruction or not output:
-        return {"messages": None}
-
-    user_msg = f"{instruction}\n{inp}".strip() if inp else instruction
-    messages = [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": user_msg},
-        {"role": "assistant", "content": output},
-    ]
-    return {"messages": messages}
-
-
-def format_messages(example, system_prompt):
-    """Handle datasets that already have a 'messages' column."""
-    msgs = example.get("messages", None)
-    if msgs and isinstance(msgs, list) and len(msgs) >= 2:
-        # Ensure system prompt is present
-        if msgs[0].get("role") != "system":
-            msgs = [{"role": "system", "content": system_prompt}] + msgs
-        return {"messages": msgs}
-    return {"messages": None}
-
-
-def detect_and_format(example, system_prompt):
-    """Auto-detect dataset format and convert to messages."""
-    # Already has messages
-    if "messages" in example and example["messages"]:
-        return format_messages(example, system_prompt)
-    # Guanaco-style
-    if "text" in example and "### Human:" in str(example.get("text", "")):
-        return format_guanaco(example, system_prompt)
-    # Alpaca-style
-    if "instruction" in example and "output" in example:
-        return format_alpaca(example, system_prompt)
-    return {"messages": None}
+# Format functions imported from utils.py (single source of truth)
+from utils import detect_and_format, cleanup_gpu
 
 
 def load_and_prepare_datasets(tokenizer, cfg):
@@ -550,7 +486,25 @@ def main():
     console.print(f"[cyan]  Adapters saved to: {OUTPUT_DIR}[/cyan]")
     console.print(f"[cyan]  Run [bold]python merge.py[/bold] to export a merged model[/cyan]")
     console.print(f"[cyan]  Run [bold]python chat.py[/bold] to test[/cyan]")
+    console.print(f"[cyan]  Run [bold]python benchmark.py --tag 'my run'[/bold] to score[/cyan]")
 
 
 if __name__ == "__main__":
-    main()
+    # GPU cleanup before starting
+    cleanup_gpu(console)
+
+    try:
+        main()
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Training interrupted by Ctrl+C[/yellow]")
+        console.print("[dim]Latest checkpoint (if any) is saved in the output directory.[/dim]")
+    except torch.cuda.OutOfMemoryError:
+        console.print("\n[bold red]Out of GPU memory![/bold red]")
+        console.print()
+        console.print("[yellow]Fix options (edit config.yaml):[/yellow]")
+        console.print(f"  [cyan]1. Reduce batch_size to 1[/cyan]  (currently: {CFG['training'].get('batch_size', '?')})")
+        console.print(f"  [cyan]2. Reduce max_length to 256[/cyan]  (currently: {CFG['data'].get('max_length', '?')})")
+        console.print(f"  [cyan]3. Kill GPU processes: nvidia-smi → sudo kill <PID>[/cyan]")
+        console.print(f"  [cyan]4. Try a smaller model with less vocabulary[/cyan]")
+        console.print()
+        console.print("[dim]Or run: python3 setup.py — it will auto-configure for your GPU.[/dim]")
