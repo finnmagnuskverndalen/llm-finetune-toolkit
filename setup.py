@@ -231,17 +231,97 @@ def run_wizard(auto=False):
     console.print()
     console.print(Rule("[bold cyan]Datasets[/bold cyan]"))
 
+    DATASET_PRESETS = [
+        {
+            "label": "General assistant (default)",
+            "desc": "OpenAssistant + Alpaca — broad conversational and instruction-following",
+            "datasets": [
+                {"name": "timdettmers/openassistant-guanaco", "split": "train"},
+                {"name": "yahma/alpaca-cleaned", "split": "train"},
+            ],
+        },
+        {
+            "label": "Conversational",
+            "desc": "OpenAssistant only — multi-turn chat focused",
+            "datasets": [
+                {"name": "timdettmers/openassistant-guanaco", "split": "train"},
+            ],
+        },
+        {
+            "label": "Instruction following",
+            "desc": "Alpaca only — single-turn instruction/response pairs",
+            "datasets": [
+                {"name": "yahma/alpaca-cleaned", "split": "train"},
+            ],
+        },
+        {
+            "label": "Code",
+            "desc": "Code Alpaca — coding instruction/response pairs",
+            "datasets": [
+                {"name": "sahil2801/CodeAlpaca-20k", "split": "train"},
+            ],
+        },
+        {
+            "label": "Code + general",
+            "desc": "Code Alpaca + OpenAssistant — coding with general chat skills",
+            "datasets": [
+                {"name": "sahil2801/CodeAlpaca-20k", "split": "train"},
+                {"name": "timdettmers/openassistant-guanaco", "split": "train"},
+            ],
+        },
+    ]
+
     if auto:
         max_samples = 2500
-        console.print(f"  Using default datasets (2x {max_samples} samples)")
+        chosen_datasets = DATASET_PRESETS[0]["datasets"]
+        console.print(f"  Using: {DATASET_PRESETS[0]['label']} ({max_samples} samples each)")
     else:
+        ds_table = Table(box=box.ROUNDED, style="cyan")
+        ds_table.add_column("#", style="dim", width=3)
+        ds_table.add_column("Preset", style="bold white")
+        ds_table.add_column("Description", style="dim")
+        for i, preset in enumerate(DATASET_PRESETS):
+            ds_table.add_row(str(i + 1), preset["label"], preset["desc"])
+        ds_table.add_row("0", "Custom", "Enter your own HuggingFace dataset IDs")
+        console.print(ds_table)
+
         try:
+            ds_choice = IntPrompt.ask("  Choose dataset preset (0 for custom)", default=1)
+
+            if ds_choice == 0:
+                # Custom datasets
+                chosen_datasets = []
+                console.print("  [dim]Enter HuggingFace dataset IDs one at a time. Empty line to finish.[/dim]")
+                while True:
+                    ds_id = Prompt.ask("  Dataset ID (or enter to finish)", default="")
+                    ds_id = ds_id.strip()
+                    if not ds_id:
+                        break
+                    ds_split = Prompt.ask("  Split", default="train")
+                    chosen_datasets.append({"name": ds_id, "split": ds_split})
+                    console.print(f"    [green]+ {ds_id}[/green] (split: {ds_split})")
+
+                if not chosen_datasets:
+                    console.print("  [yellow]No datasets entered, using default[/yellow]")
+                    chosen_datasets = DATASET_PRESETS[0]["datasets"]
+            elif 1 <= ds_choice <= len(DATASET_PRESETS):
+                chosen_datasets = DATASET_PRESETS[ds_choice - 1]["datasets"]
+                console.print(f"  [green]Using: {DATASET_PRESETS[ds_choice - 1]['label']}[/green]")
+            else:
+                chosen_datasets = DATASET_PRESETS[0]["datasets"]
+
             max_samples = IntPrompt.ask(
-                "  Max samples per dataset (more = better quality, slower training)",
+                "  Max samples per dataset (more = better, slower)",
                 default=2500,
             )
         except (KeyboardInterrupt, EOFError):
             max_samples = 2500
+            chosen_datasets = DATASET_PRESETS[0]["datasets"]
+
+    # Add max_samples to each dataset entry
+    final_datasets = []
+    for ds in chosen_datasets:
+        final_datasets.append({**ds, "max_samples": max_samples})
 
     # ── Generate config ──
     config = {
@@ -261,10 +341,7 @@ def run_wizard(auto=False):
             "dropout": 0.05,
             "bias": "none",
         },
-        "datasets": [
-            {"name": "timdettmers/openassistant-guanaco", "split": "train", "max_samples": max_samples},
-            {"name": "yahma/alpaca-cleaned", "split": "train", "max_samples": max_samples},
-        ],
+        "datasets": final_datasets,
         "data": {
             "max_assistant_chars": 1500,
             "min_assistant_chars": 20,
@@ -314,7 +391,9 @@ def run_wizard(auto=False):
     preview.add_row("Max length", f"{safe['max_length']} tokens")
     preview.add_row("Learning rate", "2e-5")
     preview.add_row("Max steps", str(max_steps))
-    preview.add_row("Datasets", f"2 x {max_samples} samples")
+    preview.add_row("Datasets", f"{len(final_datasets)} dataset(s), {max_samples} samples each")
+    for ds in final_datasets:
+        preview.add_row("", f"  {ds['name']}")
     console.print(preview)
 
     # ── Save ──
