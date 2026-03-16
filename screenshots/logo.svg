@@ -97,8 +97,7 @@
     <rect x="35" y="35" width="6" height="6" rx="1" fill="none" stroke="#aa44ff" stroke-width="0.6"/>
   </g>
 
-  <text x="0" y="-4" text-anchor="middle" font-family="monospace" font-size="22" font-weight="bold" fill="#aa44ff" letter-spacing="2" opacity="0.95">LLM</text>
-  <text x="0" y="16" text-anchor="middle" font-family="monospace" font-size="9" fill="#00ffaa" letter-spacing="3" opacity="0.6">NEURAL CORE</text>
+  <text x="0" y="2" text-anchor="middle" font-family="monospace" font-size="22" font-weight="bold" fill="#aa44ff" letter-spacing="2" opacity="0.95">LLM</text>
 
   <line x1="-100" y1="0" x2="-32" y2="0" stroke="#00ffaa" stroke-width="0.5" opacity="0.15"/>
   <line x1="32" y1="0" x2="100" y2="0" stroke="#00ffaa" stroke-width="0.5" opacity="0.15"/>
