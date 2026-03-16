@@ -219,11 +219,27 @@ def compute_refusal_directions(harmful_acts, harmless_acts):
 # ── Weight orthogonalization ─────────────────────────────────
 
 def orthogonalize_matrix(matrix, direction):
-    """Remove the component of each row of matrix that lies along direction."""
+    """
+    Remove the component of matrix that lies along direction.
+    Handles both orientations:
+      - (out_features, hidden_dim) where hidden_dim matches direction
+      - (hidden_dim, out_features) where hidden_dim is the first dim
+    """
     dir_device = matrix.device
-    d = direction.to(dir_device).unsqueeze(1)
-    proj = (matrix @ d) * d.T
-    return matrix - proj
+    d = direction.to(dir_device)
+    hidden_dim = d.shape[0]
+
+    if matrix.shape[-1] == hidden_dim:
+        # Standard: rows project onto direction (e.g. embedding, o_proj)
+        proj = (matrix @ d.unsqueeze(1)) * d.unsqueeze(0)
+        return matrix - proj
+    elif matrix.shape[0] == hidden_dim:
+        # Transposed: columns project onto direction (e.g. down_proj in some archs)
+        proj = d.unsqueeze(1) * (d.unsqueeze(0) @ matrix)
+        return matrix - proj
+    else:
+        # Neither dimension matches — skip this matrix
+        return matrix
 
 
 def apply_abliteration(model, refusal_dir):
