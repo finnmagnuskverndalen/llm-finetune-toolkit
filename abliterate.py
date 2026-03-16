@@ -1,11 +1,12 @@
 """
-Remove refusal behavior from a fine-tuned model using abliteration.
+Remove refusal behavior from a model using abliteration.
 
 This implements weight orthogonalization (Arditi et al., 2024) to identify and
 remove the "refusal direction" from a model's residual stream. The result is a
 model that no longer refuses prompts, without any retraining.
 
-Requires a merged model — run merge.py first.
+Works on both fine-tuned (merged) models and base models directly.
+No fine-tuning required — you can go straight from setup.py to abliterate.py.
 
 How it works:
   1. Run the model on harmful + harmless prompts
@@ -17,7 +18,8 @@ Based on: https://huggingface.co/blog/mlabonne/abliteration
 Paper: "Refusal in LLMs is mediated by a single direction" (Arditi et al.)
 
 Usage:
-    python3 abliterate.py                # Abliterate merged model
+    python3 abliterate.py                # Abliterate merged model (or base if no merged exists)
+    python3 abliterate.py --base         # Abliterate base model directly (skip fine-tuning)
     python3 abliterate.py --dry-run      # Preview without saving
     python3 abliterate.py --layer 9      # Use specific layer candidate
     python3 abliterate.py --skip-eval    # Skip direction evaluation (use top-1)
@@ -452,16 +454,19 @@ def load_abliteration_datasets(ablit_cfg):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Remove refusal behavior from a fine-tuned model using abliteration",
+        description="Remove refusal behavior from a model using abliteration",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "Examples:\n"
-            "  python3 abliterate.py                # Abliterate merged model\n"
+            "  python3 abliterate.py                # Abliterate merged or base model\n"
+            "  python3 abliterate.py --base         # Abliterate base model directly (skip fine-tuning)\n"
             "  python3 abliterate.py --dry-run      # Preview without saving\n"
             "  python3 abliterate.py --layer 5      # Use specific candidate index\n"
             "  python3 abliterate.py --skip-eval    # Skip evaluation, use top-1 direction\n"
         ),
     )
+    parser.add_argument("--base", action="store_true",
+                        help="Abliterate the base model directly (no fine-tuning needed)")
     parser.add_argument("--dry-run", action="store_true",
                         help="Show before/after comparison without saving")
     parser.add_argument("--layer", type=int, default=None,
@@ -471,6 +476,7 @@ def main():
     args = parser.parse_args()
 
     model_short = get_model_short_name(CFG)
+    base_id = CFG["model"]["name"]
     merged_dir = Path(CFG["model"]["merged_dir"])
     ablit_cfg = get_ablit_cfg()
 
@@ -480,31 +486,65 @@ def main():
         border_style="cyan",
     ))
 
-    # ── Check prerequisites ──
-    if not merged_dir.exists() or not (merged_dir / "config.json").exists():
-        console.print(f"[red]✗ Merged model not found at {merged_dir}[/red]")
-        console.print("[yellow]  Run merge.py first: python3 merge.py[/yellow]")
-        return
+    # ── Decide what to load ──
+    from transformers import AutoTokenizer, AutoModelForCausalLM
+    compute_dtype = get_compute_dtype()
+
+    has_merged = merged_dir.exists() and (merged_dir / "config.json").exists()
+    use_base = args.base
+
+    # If no merged model and --base not explicitly set, ask the user
+    if not has_merged and not use_base:
+        console.print(f"[yellow]No merged model found at {merged_dir}[/yellow]")
+        console.print()
+        console.print("  You can abliterate the base model directly — no fine-tuning needed.")
+        console.print(f"  Base model: [cyan]{base_id}[/cyan]")
+        console.print()
+        try:
+            answer = console.input(
+                "[yellow]Abliterate the base model? (Y/n): [/yellow]"
+            ).strip().lower()
+        except (KeyboardInterrupt, EOFError):
+            console.print("\n[dim]Cancelled[/dim]")
+            return
+
+        if answer in ("", "y", "yes"):
+            use_base = True
+        else:
+            console.print("[dim]Run finetune.py → merge.py first, then try again.[/dim]")
+            return
 
     # ── Load model (full precision, no quantization) ──
     console.print(Rule("[bold cyan]Loading model[/bold cyan]"))
-    compute_dtype = get_compute_dtype()
 
-    with console.status("[cyan]Loading merged model (full precision)...[/cyan]"):
-        from transformers import AutoTokenizer, AutoModelForCausalLM
+    if use_base:
+        console.print(f"  Source: [cyan]{base_id}[/cyan] (base model from HuggingFace)")
+        with console.status("[cyan]Downloading and loading base model (full precision)...[/cyan]"):
+            model = AutoModelForCausalLM.from_pretrained(
+                base_id,
+                torch_dtype=compute_dtype,
+                device_map="auto",
+                trust_remote_code=True,
+            )
+            tokenizer = AutoTokenizer.from_pretrained(
+                base_id, trust_remote_code=True,
+            )
+    else:
+        console.print(f"  Source: [cyan]{merged_dir}[/cyan] (merged model)")
+        with console.status("[cyan]Loading merged model (full precision)...[/cyan]"):
+            model = AutoModelForCausalLM.from_pretrained(
+                str(merged_dir),
+                torch_dtype=compute_dtype,
+                device_map="auto",
+                trust_remote_code=True,
+            )
+            tokenizer = AutoTokenizer.from_pretrained(
+                str(merged_dir), trust_remote_code=True,
+            )
 
-        model = AutoModelForCausalLM.from_pretrained(
-            str(merged_dir),
-            torch_dtype=compute_dtype,
-            device_map="auto",
-            trust_remote_code=True,
-        )
-        tokenizer = AutoTokenizer.from_pretrained(
-            str(merged_dir), trust_remote_code=True,
-        )
-        if tokenizer.pad_token is None:
-            tokenizer.pad_token = tokenizer.eos_token
-        tokenizer.padding_side = "left"
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+    tokenizer.padding_side = "left"
 
     model.eval()
     torch.set_grad_enabled(False)
@@ -640,13 +680,17 @@ def main():
         ))
         return
 
-    output_dir = merged_dir  # Overwrite merged model in-place
+    # Determine output directory
     ablit_output = CFG.get("abliteration", {}).get("output_dir", None)
     if ablit_output:
         output_dir = Path(ablit_output)
+    else:
+        # Save to merged_dir so export.py and chat.py --merged find it
+        output_dir = merged_dir
 
     console.print(Rule("[bold cyan]Saving abliterated model[/bold cyan]"))
     with console.status(f"[cyan]Saving to {output_dir}...[/cyan]"):
+        output_dir.mkdir(parents=True, exist_ok=True)
         model.save_pretrained(str(output_dir))
         tokenizer.save_pretrained(str(output_dir))
 

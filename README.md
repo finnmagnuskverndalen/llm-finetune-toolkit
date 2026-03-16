@@ -193,11 +193,22 @@ python3 merge.py --push username/my-model # Push to HuggingFace Hub
 Remove refusal behavior from your merged model using [abliteration](https://huggingface.co/blog/mlabonne/abliteration) — a technique that identifies and removes the "refusal direction" in a model's weights without any retraining.
 
 ```bash
-python3 abliterate.py                # Abliterate merged model
+python3 abliterate.py                # Abliterate merged model (or base if no merged exists)
+python3 abliterate.py --base         # Abliterate base model directly (skip fine-tuning)
 python3 abliterate.py --dry-run      # Preview without saving
 python3 abliterate.py --skip-eval    # Skip candidate evaluation, use top-ranked direction
 python3 abliterate.py --layer 5      # Use a specific candidate index
 ```
+
+**No fine-tuning required.** You can go straight from `setup.py` to `abliterate.py` to uncensor a base model:
+```bash
+python3 setup.py                     # Pick a model
+python3 abliterate.py --base         # Download and abliterate it
+python3 chat.py --merged             # Chat with the abliterated model
+python3 export.py                    # Export to Ollama
+```
+
+If a merged model exists (from fine-tuning), it uses that by default. If not, it asks whether to abliterate the base model directly.
 
 **How it works:**
 1. Runs the model on harmful + harmless prompts and records internal activations
@@ -334,11 +345,15 @@ Or manually in `config.yaml`:
 
 ## Workflow
 ```
+                        Full pipeline:
 setup.py  →  validate.py  →  finetune.py  →  benchmark.py  →  merge.py  →  abliterate.py  →  export.py
                  ↑                ↓               ↓                                              ↓
                  │            chat.py        --history                                     ollama run
                  └──────────────────── adjust config.yaml ──────────────────────────────────────┘
                                                                     cleanup.py (free disk space)
+
+                        Quick abliteration (no fine-tuning):
+                        setup.py  →  abliterate.py --base  →  chat.py --merged  →  export.py
 ```
 
 ## Requirements
