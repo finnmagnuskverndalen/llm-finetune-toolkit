@@ -19,11 +19,6 @@ Real-time TUI showing loss, GPU/CPU/RAM usage, and training progress.
 
 ![Training Dashboard](screenshots/finetune.png)
 
-### Validation
-Pre-flight checks catch bad configs and show token distributions before you commit GPU time.
-
-![Validation](screenshots/validate.png)
-
 ### Chat Interface
 Interactive streaming chat with model switching between base and fine-tuned.
 
