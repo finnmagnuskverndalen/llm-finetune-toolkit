@@ -51,9 +51,9 @@ def get_ablit_cfg():
     """Get abliteration config with defaults."""
     cfg = CFG.get("abliteration", {})
     return {
-        "harmful_dataset": cfg.get("harmful_dataset", "mlabonne/harmful_behaviors"),
+        "harmful_dataset": cfg.get("harmful_dataset", "allenai/wildjailbreak"),
         "harmless_dataset": cfg.get("harmless_dataset", "mlabonne/harmless_alpaca"),
-        "n_samples": cfg.get("n_samples", 128),
+        "n_samples": cfg.get("n_samples", 256),
         "batch_size": cfg.get("batch_size", 2),
         "eval_candidates": cfg.get("eval_candidates", 20),
         "eval_prompts": cfg.get("eval_prompts", 8),
@@ -332,36 +332,109 @@ def check_refusal_rate(model, tokenizer, prompts=None, max_tokens=100):
 # ── Dataset loading ──────────────────────────────────────────
 
 def load_abliteration_datasets(ablit_cfg):
-    """Load harmful and harmless instruction datasets."""
+    """
+    Load harmful and harmless instruction datasets.
+
+    Handles multiple dataset formats:
+      - allenai/wildjailbreak: uses 'vanilla' column, filters by data_type
+      - mlabonne/harmful_behaviors: uses 'text' column
+      - JailbreakBench/JBB-Behaviors: uses 'Goal' column
+      - Generic: auto-detects text/instruction/prompt columns
+    """
     from datasets import load_dataset
+    import random
 
-    console.print(f"  Loading harmful: {ablit_cfg['harmful_dataset']}")
-    harmful_ds = load_dataset(ablit_cfg["harmful_dataset"])
-    harmful_train = harmful_ds["train"]
+    n = ablit_cfg["n_samples"]
 
-    console.print(f"  Loading harmless: {ablit_cfg['harmless_dataset']}")
-    harmless_ds = load_dataset(ablit_cfg["harmless_dataset"])
-    harmless_train = harmless_ds["train"]
+    # ── Load harmful dataset ──
+    harmful_name = ablit_cfg["harmful_dataset"]
+    console.print(f"  Loading harmful: {harmful_name}")
 
+    harmful_texts = []
+    try:
+        if "wildjailbreak" in harmful_name:
+            # wildjailbreak has train split with 'vanilla' and 'data_type' columns
+            # vanilla_harmful = direct harmful requests (cleanest signal)
+            ds = load_dataset(harmful_name, split="train", streaming=True)
+            count = 0
+            for row in ds:
+                if count >= n:
+                    break
+                if row.get("data_type") == "vanilla_harmful":
+                    text = row.get("vanilla", "").strip()
+                    if text and len(text) > 10:
+                        harmful_texts.append(text)
+                        count += 1
+            console.print(f"    Loaded {len(harmful_texts)} vanilla harmful prompts (streaming)")
+
+        elif "JBB-Behaviors" in harmful_name:
+            ds = load_dataset(harmful_name, split="harmful")
+            for row in ds:
+                text = row.get("Goal", row.get("goal", "")).strip()
+                if text:
+                    harmful_texts.append(text)
+            harmful_texts = harmful_texts[:n]
+
+        else:
+            # Generic: try common column names
+            ds = load_dataset(harmful_name)
+            split = ds.get("train", ds.get("test", list(ds.values())[0]))
+            for col in ("text", "instruction", "prompt", "goal", "Goal"):
+                if col in split.column_names:
+                    harmful_texts = [str(t).strip() for t in split[col][:n] if str(t).strip()]
+                    break
+            if not harmful_texts:
+                for col in split.column_names:
+                    if isinstance(split[0][col], str):
+                        harmful_texts = [str(t).strip() for t in split[col][:n] if str(t).strip()]
+                        break
+
+    except Exception as e:
+        console.print(f"  [yellow]Error loading {harmful_name}: {e}[/yellow]")
+        console.print(f"  [yellow]Falling back to mlabonne/harmful_behaviors[/yellow]")
+        ds = load_dataset("mlabonne/harmful_behaviors")
+        harmful_texts = [str(t).strip() for t in ds["train"]["text"][:n] if str(t).strip()]
+
+    if not harmful_texts:
+        raise ValueError(f"No harmful texts loaded from {harmful_name}")
+
+    # Shuffle for diversity
+    random.shuffle(harmful_texts)
+    harmful_texts = harmful_texts[:n]
+    console.print(f"    {len(harmful_texts)} harmful prompts ready")
+
+    # ── Load harmless dataset ──
+    harmless_name = ablit_cfg["harmless_dataset"]
+    console.print(f"  Loading harmless: {harmless_name}")
+
+    harmless_texts = []
+    try:
+        ds = load_dataset(harmless_name)
+        split = ds.get("train", list(ds.values())[0])
+        for col in ("text", "instruction", "prompt"):
+            if col in split.column_names:
+                harmless_texts = [str(t).strip() for t in split[col] if str(t).strip()]
+                break
+        if not harmless_texts:
+            for col in split.column_names:
+                if isinstance(split[0][col], str):
+                    harmless_texts = [str(t).strip() for t in split[col] if str(t).strip()]
+                    break
+    except Exception as e:
+        console.print(f"  [red]Error loading {harmless_name}: {e}[/red]")
+        raise
+
+    random.shuffle(harmless_texts)
+    harmless_texts = harmless_texts[:n]
+    console.print(f"    {len(harmless_texts)} harmless prompts ready")
+
+    # ── Format as chat messages ──
     def to_messages(texts):
         return [[{"role": "user", "content": t}] for t in texts]
 
-    def get_texts(dataset, max_n):
-        for col in ("text", "instruction", "prompt"):
-            if col in dataset.column_names:
-                return to_messages(dataset[col][:max_n])
-        for col in dataset.column_names:
-            if isinstance(dataset[0][col], str):
-                return to_messages(dataset[col][:max_n])
-        raise ValueError(f"No text column found: {dataset.column_names}")
-
-    n = ablit_cfg["n_samples"]
-    harmful_msgs = get_texts(harmful_train, n)
-    harmless_msgs = get_texts(harmless_train, n)
-
-    min_n = min(len(harmful_msgs), len(harmless_msgs))
-    harmful_msgs = harmful_msgs[:min_n]
-    harmless_msgs = harmless_msgs[:min_n]
+    min_n = min(len(harmful_texts), len(harmless_texts))
+    harmful_msgs = to_messages(harmful_texts[:min_n])
+    harmless_msgs = to_messages(harmless_texts[:min_n])
 
     console.print(f"  Using {min_n} samples per category")
     return harmful_msgs, harmless_msgs
@@ -398,6 +471,7 @@ def main():
     base_id = CFG["model"]["name"]
     merged_dir = Path(CFG["model"]["merged_dir"])
     ablit_cfg = get_ablit_cfg()
+    start_time = time.time()
 
     console.print(Panel(
         f"[bold]Abliteration — {model_short}[/bold]\n"
@@ -449,6 +523,36 @@ def main():
 
     layers = get_layer_module_list(model)
     console.print(f"[green]✓[/green] Loaded {model_short} — {len(layers)} layers, dtype={compute_dtype}")
+
+    # ── Time estimation ──
+    n_samples = ablit_cfg["n_samples"]
+    n_layers = len(layers)
+    has_gpu = torch.cuda.is_available()
+
+    # Rough estimates: per-sample time scales with layer count
+    if has_gpu:
+        secs_per_sample = n_layers * 0.002  # ~0.05s for 24-layer model on GPU
+    else:
+        secs_per_sample = n_layers * 0.012  # ~0.3s for 24-layer model on CPU
+
+    est_activation = n_samples * 2 * secs_per_sample
+    est_eval = 20 * 8 * secs_per_sample * 3  # candidates x prompts x generation overhead
+    est_baseline = 8 * secs_per_sample * 5
+    est_total = est_activation + est_eval + est_baseline
+
+    if est_total < 60:
+        time_str = f"~{est_total:.0f} seconds"
+    elif est_total < 3600:
+        time_str = f"~{est_total / 60:.0f} minutes"
+    else:
+        time_str = f"~{est_total / 3600:.1f} hours"
+
+    device_str = "GPU" if has_gpu else "CPU"
+    console.print(
+        f"  [dim]Estimated time: {time_str} "
+        f"({n_samples} samples, {n_layers} layers, {device_str})[/dim]"
+    )
+    console.print()
 
     # ── Baseline check (all 8 prompts) ──
     console.print(Rule("[bold cyan]Baseline behavior check[/bold cyan]"))
@@ -599,7 +703,14 @@ def main():
 
     console.print(f"[green]✓[/green] Saved to {output_dir}")
     console.print()
-    console.print(f"[bold green]✓ Abliteration complete! ({applied} directions removed)[/bold green]")
+    elapsed = time.time() - start_time
+    if elapsed < 60:
+        elapsed_str = f"{elapsed:.0f}s"
+    elif elapsed < 3600:
+        elapsed_str = f"{elapsed / 60:.1f}m"
+    else:
+        elapsed_str = f"{elapsed / 3600:.1f}h"
+    console.print(f"[bold green]✓ Abliteration complete! ({applied} directions removed in {elapsed_str})[/bold green]")
     console.print(f"[cyan]  Test: python3 chat.py --merged[/cyan]")
     console.print(f"[cyan]  Benchmark: python3 benchmark.py --tag 'abliterated'[/cyan]")
     console.print(f"[cyan]  Export: python3 export.py[/cyan]")

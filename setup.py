@@ -326,10 +326,37 @@ def run_wizard(auto=False):
     # ── Abliteration ──
     console.print()
     console.print(Rule("[bold cyan]Abliteration (optional)[/bold cyan]"))
-    console.print("  [dim]Removes refusal behavior from the model after fine-tuning.[/dim]")
-    console.print("  [dim]Runs after merge.py — no retraining needed.[/dim]")
+    console.print("  [dim]Removes refusal behavior from the model — no retraining needed.[/dim]")
+    console.print("  [dim]Can run directly on base model or after fine-tuning.[/dim]")
 
     enable_abliteration = False
+    ablit_dataset = "allenai/wildjailbreak"
+    ablit_dataset_label = "WildJailbreak"
+
+    ABLIT_DATASET_PRESETS = [
+        {
+            "label": "WildJailbreak (recommended)",
+            "name": "allenai/wildjailbreak",
+            "desc": "262K diverse harmful prompts across 13 risk categories — best results",
+            "size": "~262K",
+            "speed": "slow (streams from HF)",
+        },
+        {
+            "label": "Harmful Behaviors",
+            "name": "mlabonne/harmful_behaviors",
+            "desc": "416 harmful prompts — lightweight, fast, decent for small models",
+            "size": "416",
+            "speed": "fast",
+        },
+        {
+            "label": "JailbreakBench",
+            "name": "JailbreakBench/JBB-Behaviors",
+            "desc": "100 curated misuse behaviors from OpenAI policy categories — very fast",
+            "size": "100",
+            "speed": "very fast",
+        },
+    ]
+
     if auto:
         console.print("  Auto: [dim]skipped (enable manually in config.yaml)[/dim]")
     else:
@@ -337,6 +364,86 @@ def run_wizard(auto=False):
             enable_abliteration = Confirm.ask("  Enable abliteration?", default=False)
         except (KeyboardInterrupt, EOFError):
             enable_abliteration = False
+
+        if enable_abliteration:
+            console.print()
+            console.print("  [bold]Choose harmful dataset for abliteration:[/bold]")
+            console.print()
+
+            ds_table = Table(box=box.ROUNDED, style="cyan")
+            ds_table.add_column("#", style="dim", width=3)
+            ds_table.add_column("Dataset", style="bold white")
+            ds_table.add_column("Samples", justify="center", width=10)
+            ds_table.add_column("Speed", justify="center", width=12)
+            ds_table.add_column("Description", style="dim")
+            for i, preset in enumerate(ABLIT_DATASET_PRESETS):
+                ds_table.add_row(
+                    str(i + 1), preset["label"], preset["size"],
+                    preset["speed"], preset["desc"],
+                )
+            console.print(ds_table)
+
+            try:
+                ds_choice = IntPrompt.ask("  Choose dataset", default=1)
+                if 1 <= ds_choice <= len(ABLIT_DATASET_PRESETS):
+                    ablit_dataset = ABLIT_DATASET_PRESETS[ds_choice - 1]["name"]
+                    ablit_dataset_label = ABLIT_DATASET_PRESETS[ds_choice - 1]["label"]
+                else:
+                    ablit_dataset = ABLIT_DATASET_PRESETS[0]["name"]
+                    ablit_dataset_label = ABLIT_DATASET_PRESETS[0]["label"]
+            except (KeyboardInterrupt, EOFError):
+                ablit_dataset = ABLIT_DATASET_PRESETS[0]["name"]
+                ablit_dataset_label = ABLIT_DATASET_PRESETS[0]["label"]
+
+            console.print(f"  [green]Using: {ablit_dataset_label}[/green]")
+
+            # ── Time estimation ──
+            # Rough estimates based on model size and sample count
+            # Activation collection: ~0.1s per sample on CPU for 0.5B, scales with params
+            # Evaluation: ~2s per candidate per prompt on CPU for 0.5B
+            model_params = chosen.get("params", "0.5B")
+            try:
+                param_num = float(model_params.replace("B", "").replace("M", ""))
+                if "M" in model_params:
+                    param_num /= 1000  # Convert to billions
+            except (ValueError, AttributeError):
+                param_num = 0.5
+
+            # Base speed: seconds per sample for activation collection
+            if vram > 0:
+                # GPU: roughly 0.05s per sample per billion params
+                secs_per_sample = 0.05 * param_num
+            else:
+                # CPU: roughly 0.3s per sample per billion params
+                secs_per_sample = 0.3 * param_num
+
+            activation_time = ablit_samples * 2 * secs_per_sample  # x2 for harmful + harmless
+            eval_time = 20 * 8 * secs_per_sample * 3  # 20 candidates x 8 prompts x generation
+            baseline_time = 8 * secs_per_sample * 5  # baseline + post check
+
+            total_est = activation_time + eval_time + baseline_time
+
+            if total_est < 60:
+                time_str = f"~{total_est:.0f} seconds"
+            elif total_est < 3600:
+                time_str = f"~{total_est / 60:.0f} minutes"
+            else:
+                time_str = f"~{total_est / 3600:.1f} hours"
+
+            console.print()
+            est_table = Table(box=box.SIMPLE, style="dim")
+            est_table.add_column("Phase", width=30)
+            est_table.add_column("Est. time", justify="right", width=15)
+            est_table.add_row("Model loading + download", "1-5 min (first run)")
+            est_table.add_row(f"Activation collection ({ablit_samples}x2 samples)", f"~{activation_time / 60:.1f} min")
+            est_table.add_row("Direction evaluation (20 candidates)", f"~{eval_time / 60:.1f} min")
+            est_table.add_row("Orthogonalization + saving", "~1 min")
+            est_table.add_row("[bold]Total (after first download)[/bold]", f"[bold]{time_str}[/bold]")
+            console.print(est_table)
+
+            device_label = f"GPU ({gpu['name']})" if gpu else "CPU"
+            console.print(f"  [dim]Estimated for {model_params} model on {device_label}[/dim]")
+            console.print(f"  [dim]First run includes dataset + model download time[/dim]")
 
     # Scale abliteration params to VRAM
     if vram <= 2:
@@ -394,12 +501,12 @@ def run_wizard(auto=False):
         },
         "abliteration": {
             "enabled": enable_abliteration,
-            "harmful_dataset": "mlabonne/harmful_behaviors",
+            "harmful_dataset": ablit_dataset,
             "harmless_dataset": "mlabonne/harmless_alpaca",
             "n_samples": ablit_samples,
             "batch_size": ablit_batch,
             "eval_candidates": 20,
-            "eval_prompts": 4,
+            "eval_prompts": 8,
             "output_dir": None,
         },
         "system_prompt": "You are a helpful, accurate assistant. Provide clear and informative responses.",
@@ -431,6 +538,9 @@ def run_wizard(auto=False):
     for ds in final_datasets:
         preview.add_row("", f"  {ds['name']}")
     preview.add_row("Abliteration", "[green]enabled[/green]" if enable_abliteration else "[dim]disabled[/dim]")
+    if enable_abliteration:
+        preview.add_row("  Dataset", ablit_dataset_label)
+        preview.add_row("  Samples", f"{ablit_samples} per category")
     console.print(preview)
 
     # ── Save ──

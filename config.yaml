@@ -72,12 +72,14 @@ system_prompt: "You are a helpful, accurate assistant. Provide clear and informa
 # Run after merge.py: python3 abliterate.py
 abliteration:
   enabled: false                              # Set to true to include in pipeline
-  harmful_dataset: "mlabonne/harmful_behaviors"
+  harmful_dataset: "allenai/wildjailbreak"    # 262K diverse harmful prompts (best results)
+  # Alternatives: "mlabonne/harmful_behaviors" (416 samples, lighter)
+  #               "JailbreakBench/JBB-Behaviors" (100 curated, fast)
   harmless_dataset: "mlabonne/harmless_alpaca"
-  n_samples: 128                              # Prompts per category (lower = less VRAM)
+  n_samples: 256                              # More = sharper refusal signal (256+ recommended)
   batch_size: 2                               # Reduce to 1 for <=2GB VRAM
   eval_candidates: 20                         # How many refusal directions to evaluate
-  eval_prompts: 4                             # Test prompts per candidate
+  eval_prompts: 8                             # Test prompts per candidate (use all 8)
   output_dir: null                            # null = overwrite merged model in-place
 
 # --- Chat inference ---
