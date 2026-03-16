@@ -139,7 +139,7 @@ def collect_activations(model, tokenizer, instructions, batch_size=2, device="cp
 
     for idx in range(n_layers):
         def make_hook(layer_idx):
-            def hook_fn(module, args, output):
+            def hook_fn(module, args):
                 if isinstance(args, tuple) and len(args) > 0:
                     hidden = args[0]
                 else:
@@ -356,7 +356,7 @@ def evaluate_direction_candidates(model, tokenizer, directions, n_eval, n_prompt
         hooks = []
         for l_idx in range(len(layers)):
             def make_hook(direction):
-                def hook_fn(module, args, output):
+                def hook_fn(module, args):
                     if isinstance(args, tuple) and len(args) > 0:
                         hidden = args[0]
                     else:
