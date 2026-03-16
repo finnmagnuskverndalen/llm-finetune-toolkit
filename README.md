@@ -1,5 +1,7 @@
 # 🧠 LLM Fine-tuning Toolkit
 
+![LLM Fine-tune Toolkit](screenshots/logo.svg)
+
 A config-driven toolkit for fine-tuning small language models (0.5B–3B parameters) using QLoRA, with a real-time training dashboard, interactive chat interface, automated benchmarking with historical scoring, abliteration (refusal removal), and one-command export to Ollama.
 
 Built for running on consumer hardware — including GPUs with as little as 2GB VRAM.
