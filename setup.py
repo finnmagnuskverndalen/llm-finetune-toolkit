@@ -397,30 +397,35 @@ def run_wizard(auto=False):
 
             console.print(f"  [green]Using: {ablit_dataset_label}[/green]")
 
+    # Scale abliteration params to VRAM (must be before time estimation)
+    if vram <= 2:
+        ablit_batch = 1
+        ablit_samples = 64
+    elif vram <= 4:
+        ablit_batch = 2
+        ablit_samples = 128
+    else:
+        ablit_batch = 4
+        ablit_samples = 256
+
+    if enable_abliteration and not auto:
             # ── Time estimation ──
-            # Rough estimates based on model size and sample count
-            # Activation collection: ~0.1s per sample on CPU for 0.5B, scales with params
-            # Evaluation: ~2s per candidate per prompt on CPU for 0.5B
             model_params = chosen.get("params", "0.5B")
             try:
                 param_num = float(model_params.replace("B", "").replace("M", ""))
                 if "M" in model_params:
-                    param_num /= 1000  # Convert to billions
+                    param_num /= 1000
             except (ValueError, AttributeError):
                 param_num = 0.5
 
-            # Base speed: seconds per sample for activation collection
             if vram > 0:
-                # GPU: roughly 0.05s per sample per billion params
                 secs_per_sample = 0.05 * param_num
             else:
-                # CPU: roughly 0.3s per sample per billion params
                 secs_per_sample = 0.3 * param_num
 
-            activation_time = ablit_samples * 2 * secs_per_sample  # x2 for harmful + harmless
-            eval_time = 20 * 8 * secs_per_sample * 3  # 20 candidates x 8 prompts x generation
-            baseline_time = 8 * secs_per_sample * 5  # baseline + post check
-
+            activation_time = ablit_samples * 2 * secs_per_sample
+            eval_time = 20 * 8 * secs_per_sample * 3
+            baseline_time = 8 * secs_per_sample * 5
             total_est = activation_time + eval_time + baseline_time
 
             if total_est < 60:
@@ -444,17 +449,6 @@ def run_wizard(auto=False):
             device_label = f"GPU ({gpu['name']})" if gpu else "CPU"
             console.print(f"  [dim]Estimated for {model_params} model on {device_label}[/dim]")
             console.print(f"  [dim]First run includes dataset + model download time[/dim]")
-
-    # Scale abliteration params to VRAM
-    if vram <= 2:
-        ablit_batch = 1
-        ablit_samples = 64
-    elif vram <= 4:
-        ablit_batch = 2
-        ablit_samples = 128
-    else:
-        ablit_batch = 4
-        ablit_samples = 256
 
     # ── Generate config ──
     config = {
