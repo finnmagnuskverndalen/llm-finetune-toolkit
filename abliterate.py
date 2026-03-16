@@ -181,6 +181,7 @@ def collect_activations(model, tokenizer, instructions, batch_size=2):
 def compute_refusal_directions(harmful_acts, harmless_acts):
     """
     Compute normalized refusal direction for each (position, layer) pair.
+    Deduplicates near-identical directions (pre_N ≈ post_N-1).
     Returns sorted list of (label, refusal_dir_tensor).
     """
     directions = []
@@ -188,7 +189,6 @@ def compute_refusal_directions(harmful_acts, harmless_acts):
     all_keys = sorted(set(harmful_acts.keys()) & set(harmless_acts.keys()))
 
     for key in all_keys:
-        # Skip layer 0 (usually not useful)
         parts = key.split("_")
         layer_idx = int(parts[-1])
         if layer_idx == 0:
@@ -207,7 +207,23 @@ def compute_refusal_directions(harmful_acts, harmless_acts):
 
     # Sort by absolute mean (most prominent direction first)
     directions.sort(key=lambda x: abs(x[1].mean().item()), reverse=True)
-    return directions
+
+    # Deduplicate: pre_N and post_(N-1) capture the same residual stream
+    # Keep only the one with higher cosine similarity to the top direction
+    seen = []
+    deduped = []
+    for key, d in directions:
+        is_dup = False
+        for _, existing_d in seen:
+            cos_sim = torch.nn.functional.cosine_similarity(d.unsqueeze(0), existing_d.unsqueeze(0)).item()
+            if cos_sim > 0.99:  # Nearly identical
+                is_dup = True
+                break
+        if not is_dup:
+            deduped.append((key, d))
+            seen.append((key, d))
+
+    return deduped
 
 
 # ── Weight orthogonalization ─────────────────────────────────
@@ -368,7 +384,7 @@ def load_abliteration_datasets(ablit_cfg):
             console.print(f"    Loaded {len(harmful_texts)} vanilla harmful prompts (streaming)")
 
         elif "JBB-Behaviors" in harmful_name:
-            ds = load_dataset(harmful_name, split="harmful")
+            ds = load_dataset(harmful_name, "behaviors", split="harmful")
             for row in ds:
                 text = row.get("Goal", row.get("goal", "")).strip()
                 if text:
@@ -627,11 +643,15 @@ def main():
     del harmful_acts, harmless_acts
     gc.collect()
 
-    # ── Iterative abliteration: apply multiple directions ──
+    # ── Iterative abliteration: apply directions, revert if worse ──
     console.print(Rule("[bold cyan]Applying abliteration[/bold cyan]"))
 
-    max_passes = args.passes if args.passes > 0 else min(10, len(directions))
+    max_passes = args.passes if args.passes > 0 else min(5, len(directions))
     applied = 0
+    best_refusals = before_refusals + before_hedges  # Combined score
+    worse_count = 0  # Track consecutive bad passes
+
+    import copy
 
     for pass_idx in range(max_passes):
         if pass_idx >= len(directions):
@@ -639,25 +659,51 @@ def main():
 
         key, refusal_dir = directions[pass_idx]
         console.print(f"  Pass {pass_idx + 1}: orthogonalizing against {key}...")
-        apply_abliteration(model, refusal_dir)
-        applied += 1
 
-        # If auto mode (passes=0), check after each pass
+        # Save weights before applying (so we can revert)
+        saved_state = copy.deepcopy(model.state_dict())
+
+        apply_abliteration(model, refusal_dir)
+
+        # Check if this pass helped
         if args.passes == 0 and not args.skip_eval:
             refusals, hedges, total, _ = check_refusal_rate(
                 model, tokenizer, EVAL_HARMFUL_PROMPTS,
             )
-            console.print(
-                f"    → {refusals} refusals, {hedges} hedges remaining"
-            )
-            if refusals == 0 and hedges == 0:
-                console.print(f"  [green]All refusals removed after {applied} passes![/green]")
-                break
+            current_score = refusals * 2 + hedges
 
-    if args.passes > 0:
-        console.print(f"  [green]Applied {applied} directions[/green]")
+            if current_score < best_refusals:
+                # Improved — keep it
+                best_refusals = current_score
+                worse_count = 0
+                applied += 1
+                console.print(
+                    f"    → [green]{refusals} refusals, {hedges} hedges (improved)[/green]"
+                )
+                if refusals == 0 and hedges == 0:
+                    console.print(f"  [green]All refusals removed after {applied} passes![/green]")
+                    break
+            else:
+                # Got worse — revert this pass
+                model.load_state_dict(saved_state)
+                worse_count += 1
+                console.print(
+                    f"    → [yellow]{refusals} refusals, {hedges} hedges (worse — reverted)[/yellow]"
+                )
+                if worse_count >= 3:
+                    console.print(f"  [yellow]3 consecutive bad passes — stopping[/yellow]")
+                    break
+        else:
+            applied += 1
 
-    console.print("[green]✓[/green] Weights orthogonalized")
+        del saved_state
+        gc.collect()
+
+    if applied == 0:
+        console.print("  [yellow]No effective directions found for this model.[/yellow]")
+        console.print("  [dim]This model may be too small for effective abliteration.[/dim]")
+    else:
+        console.print(f"  [green]Applied {applied} effective directions[/green]")
 
     # ── Post-abliteration check ──
     console.print(Rule("[bold cyan]Post-abliteration check[/bold cyan]"))
