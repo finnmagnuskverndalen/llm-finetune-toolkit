@@ -1,6 +1,6 @@
 # 🧠 LLM Fine-tuning Toolkit
 
-A config-driven toolkit for fine-tuning small language models (0.5B–3B parameters) using QLoRA, with a real-time training dashboard, interactive chat interface, automated benchmarking with historical scoring, and one-command export to Ollama.
+A config-driven toolkit for fine-tuning small language models (0.5B–3B parameters) using QLoRA, with a real-time training dashboard, interactive chat interface, automated benchmarking with historical scoring, abliteration (refusal removal), and one-command export to Ollama.
 
 Built for running on consumer hardware — including GPUs with as little as 2GB VRAM.
 
@@ -18,6 +18,9 @@ Built for running on consumer hardware — including GPUs with as little as 2GB 
 Real-time TUI showing loss, GPU/CPU/RAM usage, and training progress.
 
 ![Training Dashboard](screenshots/finetune.png)
+
+### Validation
+Pre-flight checks catch bad configs and show token distributions before you commit GPU time.
 
 ### Chat Interface
 Interactive streaming chat with model switching between base and fine-tuned.
@@ -42,8 +45,10 @@ Interactive streaming chat with model switching between base and fine-tuned.
 - **Eval split tracking** — monitors validation loss to detect overfitting
 - **Benchmark scoring** — composite 0-100 score with historical tracking to measure improvement over time
 - **Streaming chat** — interactive terminal chat with model switching, history, and help command
+- **Abliteration** — remove refusal behavior from any model without retraining, using weight orthogonalization
 - **Merge & export** — produce standalone models for deployment or HuggingFace Hub upload
 - **Ollama export** — one-command conversion to GGUF with auto-generated Modelfile and Ollama registration
+- **Cleanup tool** — selectively remove trained models, HuggingFace cache, and artifacts to free disk space
 
 ## Project Structure
 ```
@@ -52,11 +57,13 @@ llm-finetune-toolkit/
 ├── config.yaml        # All hyperparameters and settings — edit this, not the code
 ├── utils.py           # Shared utilities (config, model loading, data formatting, GPU cleanup)
 ├── finetune.py        # Training script with QLoRA, live dashboard, and eval tracking
-├── chat.py            # Interactive streaming chat (base / finetuned / merged modes)
+├── chat.py            # Interactive streaming chat (base / finetuned / merged / abliterated)
 ├── validate.py        # Pre-flight checks: config validation, data stats, memory estimates
 ├── benchmark.py       # Scored benchmarking with historical tracking
 ├── merge.py           # Merge LoRA adapters into standalone model for deployment
+├── abliterate.py      # Remove refusal behavior using weight orthogonalization
 ├── export.py          # Convert to GGUF and register with Ollama
+├── cleanup.py         # Remove trained models, caches, and artifacts
 ├── requirements.txt   # Python dependencies
 └── README.md
 ```
@@ -134,6 +141,7 @@ The live dashboard shows training progress, loss, eval metrics, and system resou
 python3 chat.py              # Fine-tuned model
 python3 chat.py --base       # Base model for comparison
 python3 chat.py --merged     # Merged model (after running merge.py)
+python3 chat.py --abliterated # Abliterated model (after running abliterate.py)
 ```
 
 Commands during chat: `switch` to toggle models, `reset` to clear history, `help` for all commands, `status` for GPU/RAM info. Press Ctrl+C during generation to stop it without crashing.
@@ -174,13 +182,45 @@ Example output:
 3   2026-03-15 18:00  71.2    B+      +12.5 ↑    500 steps lr=1e-5  steps=500 lr=1e-05 r=16
 ```
 
-### 7. Export & Merge
+### 7. Merge
 ```bash
 python3 merge.py                          # Merge LoRA adapters into standalone model
 python3 merge.py --push username/my-model # Push to HuggingFace Hub
 ```
 
-### 8. Export to Ollama
+### 8. Abliterate (optional)
+
+Remove refusal behavior from your merged model using [abliteration](https://huggingface.co/blog/mlabonne/abliteration) — a technique that identifies and removes the "refusal direction" in a model's weights without any retraining.
+
+```bash
+python3 abliterate.py                # Abliterate merged model
+python3 abliterate.py --dry-run      # Preview without saving
+python3 abliterate.py --skip-eval    # Skip candidate evaluation, use top-ranked direction
+python3 abliterate.py --layer 5      # Use a specific candidate index
+```
+
+**How it works:**
+1. Runs the model on harmful + harmless prompts and records internal activations
+2. Computes the mean difference — this is the "refusal direction"
+3. Evaluates candidates using inference-time intervention (no weight changes)
+4. Applies weight orthogonalization to permanently remove the refusal direction
+5. Shows before/after refusal rate comparison
+
+The script auto-skips if the model already doesn't refuse. No extra dependencies needed — uses standard PyTorch hooks instead of TransformerLens.
+
+Enable in the setup wizard or in `config.yaml`:
+```yaml
+abliteration:
+  enabled: true
+  harmful_dataset: "mlabonne/harmful_behaviors"
+  harmless_dataset: "mlabonne/harmless_alpaca"
+  n_samples: 128        # Reduce to 64 for <=2GB VRAM
+  batch_size: 2          # Reduce to 1 for <=2GB VRAM
+  eval_candidates: 20
+  eval_prompts: 4
+```
+
+### 9. Export to Ollama
 ```bash
 python3 export.py                          # Default: Q8_0 quantization + Ollama registration
 python3 export.py --quantize q4_k_m        # Smaller, faster (4-bit)
@@ -212,6 +252,21 @@ curl -fsSL https://ollama.com/install.sh | sh
 | q4_0 | 4-bit — smallest practical, more quality loss |
 | q3_k_m | 3-bit — very small, noticeable quality loss |
 | q2_k | 2-bit — tiny, significant quality loss |
+
+### 10. Cleanup
+
+Remove trained models, HuggingFace cache, and artifacts to free disk space:
+
+```bash
+python3 cleanup.py              # Interactive — choose what to remove
+python3 cleanup.py --all        # Remove everything (no prompts)
+python3 cleanup.py --models     # Only trained/merged/exported models
+python3 cleanup.py --cache      # Only HuggingFace model + dataset caches
+python3 cleanup.py --artifacts  # Only benchmark history, checkpoints, backups
+python3 cleanup.py --dry-run    # Preview what would be deleted
+```
+
+Shows a table of everything found with sizes before you confirm deletion.
 
 ## Configuration
 
@@ -279,10 +334,11 @@ Or manually in `config.yaml`:
 
 ## Workflow
 ```
-setup.py  →  validate.py  →  finetune.py  →  benchmark.py  →  merge.py  →  export.py
-                 ↑                ↓               ↓                            ↓
-                 │            chat.py        --history                   ollama run
-                 └──────── adjust config.yaml ─────────────────────────────────┘
+setup.py  →  validate.py  →  finetune.py  →  benchmark.py  →  merge.py  →  abliterate.py  →  export.py
+                 ↑                ↓               ↓                                              ↓
+                 │            chat.py        --history                                     ollama run
+                 └──────────────────── adjust config.yaml ──────────────────────────────────────┘
+                                                                    cleanup.py (free disk space)
 ```
 
 ## Requirements

@@ -152,6 +152,7 @@ def chat(model, tokenizer, mode):
         "finetuned": "finetuned",
         "merged": "merged (exported)",
         "base": "base model",
+        "abliterated": "abliterated (uncensored)",
     }
     model_label = f"[bright_green]{MODEL_SHORT}[/bright_green]"
     print_header(mode_labels.get(mode, mode))
@@ -189,10 +190,12 @@ def chat(model, tokenizer, mode):
             continue
 
         if cmd == "switch":
+            ablit_enabled = CFG.get("abliteration", {}).get("enabled", False)
             next_mode = {
                 "finetuned": "base",
                 "base": "merged" if Path(MERGED_DIR).exists() else "finetuned",
-                "merged": "finetuned",
+                "merged": "abliterated" if ablit_enabled else "finetuned",
+                "abliterated": "finetuned",
             }
             mode = next_mode.get(mode, "finetuned")
             model, tokenizer, mode = load_model(mode)
@@ -243,6 +246,8 @@ if __name__ == "__main__":
         mode = "base"
     elif "--merged" in sys.argv:
         mode = "merged"
+    elif "--abliterated" in sys.argv:
+        mode = "abliterated"
 
     try:
         model, tokenizer, mode = load_model(mode)

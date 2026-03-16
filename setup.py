@@ -323,6 +323,32 @@ def run_wizard(auto=False):
     for ds in chosen_datasets:
         final_datasets.append({**ds, "max_samples": max_samples})
 
+    # ── Abliteration ──
+    console.print()
+    console.print(Rule("[bold cyan]Abliteration (optional)[/bold cyan]"))
+    console.print("  [dim]Removes refusal behavior from the model after fine-tuning.[/dim]")
+    console.print("  [dim]Runs after merge.py — no retraining needed.[/dim]")
+
+    enable_abliteration = False
+    if auto:
+        console.print("  Auto: [dim]skipped (enable manually in config.yaml)[/dim]")
+    else:
+        try:
+            enable_abliteration = Confirm.ask("  Enable abliteration?", default=False)
+        except (KeyboardInterrupt, EOFError):
+            enable_abliteration = False
+
+    # Scale abliteration params to VRAM
+    if vram <= 2:
+        ablit_batch = 1
+        ablit_samples = 64
+    elif vram <= 4:
+        ablit_batch = 2
+        ablit_samples = 128
+    else:
+        ablit_batch = 4
+        ablit_samples = 256
+
     # ── Generate config ──
     config = {
         "model": {
@@ -366,6 +392,16 @@ def run_wizard(auto=False):
             "neftune_noise_alpha": 5.0,
             "report_to": "none",
         },
+        "abliteration": {
+            "enabled": enable_abliteration,
+            "harmful_dataset": "mlabonne/harmful_behaviors",
+            "harmless_dataset": "mlabonne/harmless_alpaca",
+            "n_samples": ablit_samples,
+            "batch_size": ablit_batch,
+            "eval_candidates": 20,
+            "eval_prompts": 4,
+            "output_dir": None,
+        },
         "system_prompt": "You are a helpful, accurate assistant. Provide clear and informative responses.",
         "chat": {
             "max_new_tokens": 512,
@@ -394,6 +430,7 @@ def run_wizard(auto=False):
     preview.add_row("Datasets", f"{len(final_datasets)} dataset(s), {max_samples} samples each")
     for ds in final_datasets:
         preview.add_row("", f"  {ds['name']}")
+    preview.add_row("Abliteration", "[green]enabled[/green]" if enable_abliteration else "[dim]disabled[/dim]")
     console.print(preview)
 
     # ── Save ──
@@ -422,8 +459,14 @@ def run_wizard(auto=False):
     console.print("[dim]Next steps:[/dim]")
     console.print("  [cyan]1. python3 validate.py[/cyan]     — verify everything looks good")
     console.print("  [cyan]2. python3 finetune.py[/cyan]     — start training")
-    console.print("  [cyan]3. python3 chat.py[/cyan]         — test your model")
-    console.print("  [cyan]4. python3 benchmark.py[/cyan]    — score it")
+    console.print("  [cyan]3. python3 merge.py[/cyan]        — merge LoRA adapters")
+    if enable_abliteration:
+        console.print("  [cyan]4. python3 abliterate.py[/cyan]   — remove refusal behavior")
+        console.print("  [cyan]5. python3 chat.py[/cyan]         — test your model")
+        console.print("  [cyan]6. python3 benchmark.py[/cyan]    — score it")
+    else:
+        console.print("  [cyan]4. python3 chat.py[/cyan]         — test your model")
+        console.print("  [cyan]5. python3 benchmark.py[/cyan]    — score it")
 
 
 if __name__ == "__main__":

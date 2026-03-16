@@ -207,6 +207,31 @@ def validate(show_samples=2):
     console.print(f"  Estimated steps: ~{steps}")
     console.print(f"  Dataset: {after} examples × {epochs} epochs")
 
+    # ── 8. Abliteration config check ──
+    ablit_cfg = CFG.get("abliteration", {})
+    if ablit_cfg.get("enabled", False):
+        console.print(f"\n[bold cyan]8. Abliteration[/bold cyan]")
+        console.print(f"  Status: [green]enabled[/green]")
+        console.print(f"  Harmful dataset: {ablit_cfg.get('harmful_dataset', 'mlabonne/harmful_behaviors')}")
+        console.print(f"  Harmless dataset: {ablit_cfg.get('harmless_dataset', 'mlabonne/harmless_alpaca')}")
+        console.print(f"  Samples: {ablit_cfg.get('n_samples', 128)}")
+        console.print(f"  Batch size: {ablit_cfg.get('batch_size', 2)}")
+
+        ablit_bs = ablit_cfg.get("batch_size", 2)
+        ablit_n = ablit_cfg.get("n_samples", 128)
+        if torch.cuda.is_available():
+            gpu_mem = torch.cuda.get_device_properties(0).total_mem / (1024**3) if hasattr(torch.cuda.get_device_properties(0), 'total_mem') else torch.cuda.get_device_properties(0).total_memory / (1024**3)
+            if gpu_mem < 3 and ablit_bs > 1:
+                warnings.append(f"Abliteration batch_size={ablit_bs} may OOM on {gpu_mem:.1f}GB GPU. Try batch_size=1.")
+            if gpu_mem < 2 and ablit_n > 64:
+                warnings.append(f"Abliteration n_samples={ablit_n} is high for {gpu_mem:.1f}GB GPU. Try 64.")
+
+        merged_dir = Path(CFG["model"]["merged_dir"])
+        if not merged_dir.exists():
+            console.print(f"  Merged model: [yellow]not found yet (run merge.py first)[/yellow]")
+        else:
+            console.print(f"  Merged model: [green]found at {merged_dir}[/green]")
+
     # ── Summary ──
     console.print()
     if errors:

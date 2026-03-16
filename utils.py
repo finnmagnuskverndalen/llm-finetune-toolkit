@@ -110,10 +110,21 @@ def cleanup_gpu(console=None):
         return True
 
 
+def get_abliterated_dir(cfg):
+    """Get the abliterated model directory, if configured."""
+    ablit_cfg = cfg.get("abliteration", {})
+    output_dir = ablit_cfg.get("output_dir", None)
+    if output_dir:
+        return output_dir
+    # Default: abliteration overwrites merged_dir in-place
+    return cfg["model"]["merged_dir"]
+
+
 def load_model_for_inference(cfg, mode="finetuned", console=None):
     """
     Load model for inference (chat, benchmark).
     Returns (model, tokenizer, actual_mode).
+    Supports modes: finetuned, base, merged, abliterated.
     """
     compute_dtype = get_compute_dtype()
     base_id = cfg["model"]["name"]
@@ -124,14 +135,14 @@ def load_model_for_inference(cfg, mode="finetuned", console=None):
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
-    if mode == "merged" and Path(merged_dir).exists():
+    if mode in ("merged", "abliterated") and Path(merged_dir).exists():
         model = AutoModelForCausalLM.from_pretrained(
             merged_dir,
             torch_dtype=compute_dtype,
             device_map="auto",
             trust_remote_code=True,
         )
-        actual_mode = "merged"
+        actual_mode = mode
     else:
         bnb_config = BitsAndBytesConfig(
             load_in_4bit=True,
