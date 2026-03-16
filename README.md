@@ -192,14 +192,13 @@ python3 merge.py --push username/my-model # Push to HuggingFace Hub
 
 ### 8. Abliterate (optional)
 
-Remove refusal behavior from your merged model using [abliteration](https://huggingface.co/blog/mlabonne/abliteration) — a technique that identifies and removes the "refusal direction" in a model's weights without any retraining.
+Remove refusal behavior from any model using [abliteration](https://huggingface.co/blog/mlabonne/abliteration) — identifies and removes the "refusal direction" in model weights without retraining. Uses techniques from community research ([grimjim](https://huggingface.co/blog/grimjim/norm-preserving-biprojected-abliteration), [huihui-ai](https://huggingface.co/huihui-ai/Qwen2.5-0.5B-Instruct-abliterated-v3), [Heretic](https://github.com/p-e-w/heretic)) proven to work on small models (0.5B+).
 
 ```bash
 python3 abliterate.py                # Abliterate merged model (or base if no merged exists)
 python3 abliterate.py --base         # Abliterate base model directly (skip fine-tuning)
+python3 abliterate.py --scale 2.0    # Stronger removal (default: 1.5, try 2.0-3.0 for stubborn models)
 python3 abliterate.py --dry-run      # Preview without saving
-python3 abliterate.py --skip-eval    # Skip candidate evaluation, use top-ranked direction
-python3 abliterate.py --layer 5      # Use a specific candidate index
 ```
 
 **No fine-tuning required.** You can go straight from `setup.py` to `abliterate.py` to uncensor a base model:
@@ -213,24 +212,25 @@ python3 export.py                    # Export to Ollama
 If a merged model exists (from fine-tuning), it uses that by default. If not, it asks whether to abliterate the base model directly.
 
 **How it works:**
-1. Runs the model on harmful + harmless prompts and records internal activations
-2. Computes the mean difference — this is the "refusal direction"
-3. Evaluates candidates using inference-time intervention (no weight changes)
-4. Applies weight orthogonalization to permanently remove the refusal direction
-5. Shows before/after refusal rate comparison
+1. Collects hidden state activations on harmful + harmless prompt datasets
+2. Finds the single best "refusal direction" from middle-to-late layers
+3. Applies that direction across a range of layers with a scale factor
+4. Auto-retries with different scales if the first attempt makes things worse
+5. Shows before/after refusal comparison on 8 test prompts
 
-The script auto-skips if the model already doesn't refuse. No extra dependencies needed — uses standard PyTorch hooks instead of TransformerLens.
+**Key techniques for small models:**
+- **Scale factor** (`--scale 1.5`): amplifies refusal removal. Standard abliteration (1.0) is too weak for small models. Try 2.0–3.0 for stubborn refusals.
+- **Single direction**: uses ONE direction from the best layer applied everywhere, not per-layer directions that cancel each other out.
+- **Layer range**: only modifies layers 30%–85% of model depth, preserving language coherence in early and late layers.
 
-Enable in the setup wizard or in `config.yaml`:
+Choose harmful datasets in the setup wizard or in `config.yaml`:
 ```yaml
 abliteration:
   enabled: true
-  harmful_dataset: "mlabonne/harmful_behaviors"
+  harmful_dataset: "allenai/wildjailbreak"    # 262K prompts (best), or "JailbreakBench/JBB-Behaviors" (fast)
   harmless_dataset: "mlabonne/harmless_alpaca"
-  n_samples: 128        # Reduce to 64 for <=2GB VRAM
-  batch_size: 2          # Reduce to 1 for <=2GB VRAM
-  eval_candidates: 20
-  eval_prompts: 4
+  n_samples: 256          # More = sharper signal. Reduce to 64 for <=2GB VRAM
+  batch_size: 2            # Reduce to 1 for <=2GB VRAM
 ```
 
 ### 9. Export to Ollama
