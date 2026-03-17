@@ -1,13 +1,12 @@
 """
 Interactive setup wizard for LLM fine-tuning.
-
 Detects your hardware, asks a few questions, and generates a safe config.yaml
 tuned for your GPU. Prevents the OOM crashes and bad hyperparameter choices
 that plague first-time setups.
 
 Usage:
-    python3 setup.py            # Interactive wizard
-    python3 setup.py --auto     # Auto-detect everything, no questions
+    python3 setup.py           # Interactive wizard
+    python3 setup.py --auto    # Auto-detect everything, no questions
 """
 
 import argparse
@@ -23,9 +22,10 @@ from rich.prompt import Prompt, IntPrompt, Confirm
 from rich import box
 
 console = Console()
+
 CONFIG_PATH = Path(__file__).parent / "config.yaml"
 
-# ── Hardware detection ──
+# ── Hardware detection ──────────────────────────────────────────
 
 def detect_gpu():
     """Detect GPU and return specs."""
@@ -38,7 +38,6 @@ def detect_gpu():
         "bf16": torch.cuda.is_bf16_supported(),
     }
 
-
 def detect_ram():
     """Detect system RAM in GB."""
     try:
@@ -47,23 +46,176 @@ def detect_ram():
     except ImportError:
         return None
 
-
-# ── Model recommendations based on VRAM ──
+# ── Model catalog ───────────────────────────────────────────────
+# Top 20 small LLMs under 1GB (ranked by overall capability).
+# Each entry includes a description to help users choose.
+# Models are sorted by min_vram (ascending) so the wizard can
+# recommend the largest model that fits.
+#
+# To add your own models, append to this list or enter 0 during
+# setup to specify any HuggingFace model ID.
 
 MODELS = [
-    {"name": "HuggingFaceTB/SmolLM-135M-Instruct",       "params": "135M", "min_vram": 1.0, "vocab": "49K"},
-    {"name": "HuggingFaceTB/SmolLM-360M-Instruct",       "params": "360M", "min_vram": 1.0, "vocab": "49K"},
-    {"name": "Qwen/Qwen2.5-0.5B-Instruct",               "params": "0.5B", "min_vram": 1.5, "vocab": "151K"},
-    {"name": "HuggingFaceTB/SmolLM2-135M-Instruct",      "params": "135M", "min_vram": 1.0, "vocab": "49K"},
-    {"name": "HuggingFaceTB/SmolLM2-360M-Instruct",      "params": "360M", "min_vram": 1.0, "vocab": "49K"},
-    {"name": "meta-llama/Llama-3.2-1B-Instruct",         "params": "1B",   "min_vram": 2.0, "vocab": "128K"},
-    {"name": "HuggingFaceTB/SmolLM-1.7B-Instruct",       "params": "1.7B", "min_vram": 2.5, "vocab": "49K"},
-    {"name": "HuggingFaceTB/SmolLM2-1.7B-Instruct",      "params": "1.7B", "min_vram": 2.5, "vocab": "49K"},
-    {"name": "Qwen/Qwen2.5-1.5B-Instruct",               "params": "1.5B", "min_vram": 3.0, "vocab": "151K"},
-    {"name": "google/gemma-2-2b-it",                      "params": "2B",   "min_vram": 3.0, "vocab": "256K"},
-    {"name": "Qwen/Qwen2.5-3B-Instruct",                 "params": "3B",   "min_vram": 5.0, "vocab": "151K"},
-    {"name": "meta-llama/Llama-3.2-3B-Instruct",         "params": "3B",   "min_vram": 5.0, "vocab": "128K"},
-    {"name": "microsoft/Phi-3.5-mini-instruct",           "params": "3.8B", "min_vram": 6.0, "vocab": "32K"},
+    {
+        "name": "HuggingFaceTB/SmolLM2-135M-Instruct",
+        "params": "135M",
+        "min_vram": 0.5,
+        "vocab": "49K",
+        "license": "Apache 2.0",
+        "description": "Smallest practical instruct model. 2T tokens training. Browser/IoT inference.",
+    },
+    {
+        "name": "ibm-granite/granite-4.0-350m",
+        "params": "350M",
+        "min_vram": 0.5,
+        "vocab": "50K",
+        "license": "Apache 2.0",
+        "description": "IBM Granite Nano. Native tool calling, RAG, FIM code, JSON output. ISO 42001 certified.",
+    },
+    {
+        "name": "HuggingFaceTB/SmolLM2-360M-Instruct",
+        "params": "360M",
+        "min_vram": 1.0,
+        "vocab": "49K",
+        "license": "Apache 2.0",
+        "description": "HuggingFace's own. 4T tokens training. Function calling via Synth-APIGen data.",
+    },
+    {
+        "name": "Qwen/Qwen2.5-0.5B-Instruct",
+        "params": "0.5B",
+        "min_vram": 1.5,
+        "vocab": "151K",
+        "license": "Apache 2.0",
+        "description": "Best overall sub-1B model. 128K context, 29 languages. Strong instruction following.",
+    },
+    {
+        "name": "Qwen/Qwen2.5-Coder-0.5B-Instruct",
+        "params": "0.5B",
+        "min_vram": 1.5,
+        "vocab": "151K",
+        "license": "Apache 2.0",
+        "description": "Best tiny coding model. Purpose-built for code completion and generation.",
+    },
+    {
+        "name": "Qwen/Qwen2-0.5B-Instruct",
+        "params": "0.5B",
+        "min_vram": 1.5,
+        "vocab": "151K",
+        "license": "Apache 2.0",
+        "description": "Predecessor to Qwen2.5. 37.9% MMLU, 40.1% GSM8K — groundbreaking at 0.5B.",
+    },
+    {
+        "name": "Qwen/Qwen3.5-0.8B",
+        "params": "0.8B",
+        "min_vram": 1.5,
+        "vocab": "151K",
+        "license": "Apache 2.0",
+        "description": "Newest tiny multimodal model. 256K context, 201 languages, thinking modes.",
+    },
+    {
+        "name": "google/gemma-3-1b-it",
+        "params": "1B",
+        "min_vram": 1.5,
+        "vocab": "256K",
+        "license": "Gemma",
+        "description": "Google edge champion. 2585 tok/s prefill on mobile GPU. Built-in function calling.",
+    },
+    {
+        "name": "ibm-granite/granite-4.0-1b",
+        "params": "1B",
+        "min_vram": 1.5,
+        "vocab": "50K",
+        "license": "Apache 2.0",
+        "description": "IBM Granite Nano dense. Tool calling, RAG, FIM code. Enterprise-grade governance.",
+    },
+    {
+        "name": "ibm-granite/granite-4.0-h-1b",
+        "params": "1.5B",
+        "min_vram": 1.5,
+        "vocab": "50K",
+        "license": "Apache 2.0",
+        "description": "IBM Granite hybrid Mamba-2/Transformer. Fastest Granite at this scale. ISO 42001.",
+    },
+    {
+        "name": "meta-llama/Llama-3.2-1B-Instruct",
+        "params": "1B",
+        "min_vram": 2.0,
+        "vocab": "128K",
+        "license": "Llama 3.2",
+        "description": "Meta's smallest Llama. 128K context. Largest fine-tune ecosystem at this size.",
+    },
+    {
+        "name": "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
+        "params": "1.1B",
+        "min_vram": 2.0,
+        "vocab": "32K",
+        "license": "Apache 2.0",
+        "description": "Classic small LLM. 3T tokens training. Huge community, tons of fine-tunes.",
+    },
+    {
+        "name": "HuggingFaceTB/SmolLM2-1.7B-Instruct",
+        "params": "1.7B",
+        "min_vram": 2.5,
+        "vocab": "49K",
+        "license": "Apache 2.0",
+        "description": "Largest SmolLM2. 11T tokens training. Strong for its size. Apache 2.0.",
+    },
+    {
+        "name": "Qwen/Qwen2.5-1.5B-Instruct",
+        "params": "1.5B",
+        "min_vram": 3.0,
+        "vocab": "151K",
+        "license": "Apache 2.0",
+        "description": "Punches well above its weight. Competitive with many 7B models from 2023.",
+    },
+    {
+        "name": "ibm-granite/granite-4.0-micro",
+        "params": "3B",
+        "min_vram": 3.0,
+        "vocab": "50K",
+        "license": "Apache 2.0",
+        "description": "IBM Granite Micro. Strong instruction following + tool calling for enterprise.",
+    },
+    {
+        "name": "google/gemma-2-2b-it",
+        "params": "2B",
+        "min_vram": 3.0,
+        "vocab": "256K",
+        "license": "Gemma",
+        "description": "Google's efficient 2B model. Clean, well-documented, good safety tuning.",
+    },
+    {
+        "name": "Qwen/Qwen2.5-3B-Instruct",
+        "params": "3B",
+        "min_vram": 5.0,
+        "vocab": "151K",
+        "license": "Apache 2.0",
+        "description": "Best overall in the 3B class. 128K context, 29 languages, strong reasoning.",
+    },
+    {
+        "name": "meta-llama/Llama-3.2-3B-Instruct",
+        "params": "3B",
+        "min_vram": 5.0,
+        "vocab": "128K",
+        "license": "Llama 3.2",
+        "description": "Meta's 3B Llama. Broadest tool support, runs on 4GB RAM quantized.",
+    },
+    {
+        "name": "HuggingFaceTB/SmolLM3-3B-Instruct",
+        "params": "3B",
+        "min_vram": 5.0,
+        "vocab": "49K",
+        "license": "Apache 2.0",
+        "description": "HuggingFace latest. Outperforms Llama-3.2-3B and Qwen2.5-3B. Dual-mode thinking.",
+    },
+    {
+        "name": "microsoft/Phi-3.5-mini-instruct",
+        "params": "3.8B",
+        "min_vram": 6.0,
+        "vocab": "32K",
+        "license": "MIT",
+        "description": "Microsoft reasoning champion. 128K context. Outperforms many 6-9B models on math.",
+    },
 ]
 
 
@@ -71,7 +223,6 @@ def get_safe_config(vram_gb, model_name=None):
     """Generate safe training parameters based on available VRAM."""
     # Find compatible models
     compatible = [m for m in MODELS if m["min_vram"] <= vram_gb]
-
     if not compatible:
         compatible = [MODELS[0]]  # Fallback to smallest
 
@@ -127,43 +278,47 @@ def run_wizard(auto=False):
     ram = detect_ram()
 
     if gpu:
-        console.print(f"  GPU:  [green]{gpu['name']}[/green] ({gpu['vram_gb']} GB VRAM)")
+        console.print(f"  GPU: [green]{gpu['name']}[/green] ({gpu['vram_gb']} GB VRAM)")
         console.print(f"  BF16: {'[green]supported[/green]' if gpu['bf16'] else '[yellow]not supported (using FP16)[/yellow]'}")
         vram = gpu["vram_gb"]
     else:
-        console.print("  GPU:  [red]not detected[/red] — training on CPU (very slow)")
+        console.print("  GPU: [red]not detected[/red] — training on CPU (very slow)")
         vram = 0
 
     if ram:
-        console.print(f"  RAM:  {ram} GB")
+        console.print(f"  RAM: {ram} GB")
 
     # ── Get safe defaults ──
     safe = get_safe_config(vram)
 
     # ── Show compatible models ──
     console.print()
-    console.print(Rule("[bold cyan]Compatible models[/bold cyan]"))
+    console.print(Rule("[bold cyan]Compatible models (20 presets + custom)[/bold cyan]"))
 
     model_table = Table(box=box.ROUNDED, style="cyan")
     model_table.add_column("#", style="dim", width=3)
-    model_table.add_column("Model", style="bold white")
-    model_table.add_column("Params", justify="center")
-    model_table.add_column("Vocab", justify="center")
-    model_table.add_column("Min VRAM", justify="center")
-    model_table.add_column("Fits?", justify="center")
+    model_table.add_column("Model", style="bold white", max_width=42)
+    model_table.add_column("Params", justify="center", width=6)
+    model_table.add_column("VRAM", justify="center", width=6)
+    model_table.add_column("License", justify="center", width=10)
+    model_table.add_column("Description", style="dim", max_width=60)
 
     for i, m in enumerate(MODELS):
         fits = m["min_vram"] <= vram if vram > 0 else True
-        fits_str = "[green]yes[/green]" if fits else "[red]no[/red]"
+        fits_marker = "✓" if fits else "✗"
         style = "" if fits else "dim"
         model_table.add_row(
-            str(i + 1), m["name"], m["params"], m["vocab"],
-            f"{m['min_vram']} GB", fits_str,
+            str(i + 1),
+            m["name"],
+            m["params"],
+            f"{m['min_vram']}G",
+            m["license"],
+            f"{'[green]' if fits else '[red]'}{fits_marker}[/] {m['description']}",
             style=style,
         )
 
     console.print(model_table)
-    console.print(f"  [dim]Or enter 0 to use a custom HuggingFace model[/dim]")
+    console.print(f"  [dim]Enter 0 to use a custom HuggingFace model ID[/dim]")
 
     # ── Choose model ──
     if auto:
@@ -178,11 +333,19 @@ def run_wizard(auto=False):
                 "  Choose model number (0 for custom)",
                 default=default_idx,
             )
+
             if choice == 0:
                 custom_id = Prompt.ask("  Enter HuggingFace model ID (e.g., user/model-name)")
                 custom_id = custom_id.strip()
                 if custom_id:
-                    chosen = {"name": custom_id, "params": "?", "min_vram": 0, "vocab": "?"}
+                    chosen = {
+                        "name": custom_id,
+                        "params": "?",
+                        "min_vram": 0,
+                        "vocab": "?",
+                        "license": "unknown",
+                        "description": "Custom model",
+                    }
                     console.print(f"  [green]Using custom model: {custom_id}[/green]")
                     console.print(f"  [dim]Make sure it's a causal LM with a chat template.[/dim]")
                 else:
@@ -216,7 +379,6 @@ def run_wizard(auto=False):
     else:
         console.print(f"  Recommended for your GPU: batch_size={safe['batch_size']}, max_length={safe['max_length']}")
         console.print()
-
         try:
             max_steps = IntPrompt.ask(
                 "  Training steps (-1 for full epochs, 50 for a quick test)",
@@ -280,9 +442,11 @@ def run_wizard(auto=False):
         ds_table.add_column("#", style="dim", width=3)
         ds_table.add_column("Preset", style="bold white")
         ds_table.add_column("Description", style="dim")
+
         for i, preset in enumerate(DATASET_PRESETS):
             ds_table.add_row(str(i + 1), preset["label"], preset["desc"])
         ds_table.add_row("0", "Custom", "Enter your own HuggingFace dataset IDs")
+
         console.print(ds_table)
 
         try:
@@ -299,7 +463,7 @@ def run_wizard(auto=False):
                         break
                     ds_split = Prompt.ask("  Split", default="train")
                     chosen_datasets.append({"name": ds_id, "split": ds_split})
-                    console.print(f"    [green]+ {ds_id}[/green] (split: {ds_split})")
+                    console.print(f"  [green]+ {ds_id}[/green] (split: {ds_split})")
 
                 if not chosen_datasets:
                     console.print("  [yellow]No datasets entered, using default[/yellow]")
@@ -376,6 +540,7 @@ def run_wizard(auto=False):
             ds_table.add_column("Samples", justify="center", width=10)
             ds_table.add_column("Speed", justify="center", width=12)
             ds_table.add_column("Description", style="dim")
+
             for i, preset in enumerate(ABLIT_DATASET_PRESETS):
                 ds_table.add_row(
                     str(i + 1), preset["label"], preset["size"],
@@ -409,46 +574,45 @@ def run_wizard(auto=False):
         ablit_samples = 256
 
     if enable_abliteration and not auto:
-            # ── Time estimation ──
-            model_params = chosen.get("params", "0.5B")
-            try:
-                param_num = float(model_params.replace("B", "").replace("M", ""))
-                if "M" in model_params:
-                    param_num /= 1000
-            except (ValueError, AttributeError):
-                param_num = 0.5
+        # ── Time estimation ──
+        model_params = chosen.get("params", "0.5B")
+        try:
+            param_num = float(model_params.replace("B", "").replace("M", ""))
+            if "M" in model_params:
+                param_num /= 1000
+        except (ValueError, AttributeError):
+            param_num = 0.5
 
-            if vram > 0:
-                secs_per_sample = 0.05 * param_num
-            else:
-                secs_per_sample = 0.3 * param_num
+        if vram > 0:
+            secs_per_sample = 0.05 * param_num
+        else:
+            secs_per_sample = 0.3 * param_num
 
-            activation_time = ablit_samples * 2 * secs_per_sample
-            eval_time = 20 * 8 * secs_per_sample * 3
-            baseline_time = 8 * secs_per_sample * 5
-            total_est = activation_time + eval_time + baseline_time
+        activation_time = ablit_samples * 2 * secs_per_sample
+        eval_time = 20 * 8 * secs_per_sample * 3
+        baseline_time = 8 * secs_per_sample * 5
+        total_est = activation_time + eval_time + baseline_time
 
-            if total_est < 60:
-                time_str = f"~{total_est:.0f} seconds"
-            elif total_est < 3600:
-                time_str = f"~{total_est / 60:.0f} minutes"
-            else:
-                time_str = f"~{total_est / 3600:.1f} hours"
+        if total_est < 60:
+            time_str = f"~{total_est:.0f} seconds"
+        elif total_est < 3600:
+            time_str = f"~{total_est / 60:.0f} minutes"
+        else:
+            time_str = f"~{total_est / 3600:.1f} hours"
 
-            console.print()
-            est_table = Table(box=box.SIMPLE, style="dim")
-            est_table.add_column("Phase", width=30)
-            est_table.add_column("Est. time", justify="right", width=15)
-            est_table.add_row("Model loading + download", "1-5 min (first run)")
-            est_table.add_row(f"Activation collection ({ablit_samples}x2 samples)", f"~{activation_time / 60:.1f} min")
-            est_table.add_row("Direction evaluation (20 candidates)", f"~{eval_time / 60:.1f} min")
-            est_table.add_row("Orthogonalization + saving", "~1 min")
-            est_table.add_row("[bold]Total (after first download)[/bold]", f"[bold]{time_str}[/bold]")
-            console.print(est_table)
-
-            device_label = f"GPU ({gpu['name']})" if gpu else "CPU"
-            console.print(f"  [dim]Estimated for {model_params} model on {device_label}[/dim]")
-            console.print(f"  [dim]First run includes dataset + model download time[/dim]")
+        console.print()
+        est_table = Table(box=box.SIMPLE, style="dim")
+        est_table.add_column("Phase", width=30)
+        est_table.add_column("Est. time", justify="right", width=15)
+        est_table.add_row("Model loading + download", "1-5 min (first run)")
+        est_table.add_row(f"Activation collection ({ablit_samples}x2 samples)", f"~{activation_time / 60:.1f} min")
+        est_table.add_row("Direction evaluation (20 candidates)", f"~{eval_time / 60:.1f} min")
+        est_table.add_row("Orthogonalization + saving", "~1 min")
+        est_table.add_row("[bold]Total (after first download)[/bold]", f"[bold]{time_str}[/bold]")
+        console.print(est_table)
+        device_label = f"GPU ({gpu['name']})" if gpu else "CPU"
+        console.print(f"  [dim]Estimated for {model_params} model on {device_label}[/dim]")
+        console.print(f"  [dim]First run includes dataset + model download time[/dim]")
 
     # ── Generate config ──
     config = {
@@ -520,8 +684,11 @@ def run_wizard(auto=False):
     preview = Table(box=box.ROUNDED, style="green")
     preview.add_column("Setting", style="bold white")
     preview.add_column("Value", style="cyan")
+
     preview.add_row("Model", chosen["name"])
     preview.add_row("Parameters", chosen["params"])
+    preview.add_row("Description", chosen.get("description", "Custom model"))
+    preview.add_row("License", chosen.get("license", "unknown"))
     preview.add_row("Batch size", str(safe["batch_size"]))
     preview.add_row("Grad accumulation", str(safe["gradient_accumulation_steps"]))
     preview.add_row("Effective batch", str(safe["batch_size"] * safe["gradient_accumulation_steps"]))
@@ -535,6 +702,7 @@ def run_wizard(auto=False):
     if enable_abliteration:
         preview.add_row("  Dataset", ablit_dataset_label)
         preview.add_row("  Samples", f"{ablit_samples} per category")
+
     console.print(preview)
 
     # ── Save ──
@@ -552,25 +720,25 @@ def run_wizard(auto=False):
     # Write with comments
     with open(CONFIG_PATH, "w") as f:
         f.write("# ============================================================\n")
-        f.write("#  Fine-tuning Configuration\n")
-        f.write(f"#  Generated by setup.py for {gpu['name'] if gpu else 'CPU'}\n")
-        f.write(f"#  VRAM: {vram}GB | Batch: {safe['batch_size']} | Max length: {safe['max_length']}\n")
+        f.write("# Fine-tuning Configuration\n")
+        f.write(f"# Generated by setup.py for {gpu['name'] if gpu else 'CPU'}\n")
+        f.write(f"# VRAM: {vram}GB | Batch: {safe['batch_size']} | Max length: {safe['max_length']}\n")
         f.write("# ============================================================\n\n")
         yaml.dump(config, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
 
     console.print(f"\n[bold green]✓ config.yaml written![/bold green]")
     console.print()
     console.print("[dim]Next steps:[/dim]")
-    console.print("  [cyan]1. python3 validate.py[/cyan]     — verify everything looks good")
-    console.print("  [cyan]2. python3 finetune.py[/cyan]     — start training")
-    console.print("  [cyan]3. python3 merge.py[/cyan]        — merge LoRA adapters")
+    console.print("  [cyan]1. python3 validate.py[/cyan]   — verify everything looks good")
+    console.print("  [cyan]2. python3 finetune.py[/cyan]   — start training")
+    console.print("  [cyan]3. python3 merge.py[/cyan]      — merge LoRA adapters")
     if enable_abliteration:
-        console.print("  [cyan]4. python3 abliterate.py[/cyan]   — remove refusal behavior")
-        console.print("  [cyan]5. python3 chat.py[/cyan]         — test your model")
-        console.print("  [cyan]6. python3 benchmark.py[/cyan]    — score it")
+        console.print("  [cyan]4. python3 abliterate.py[/cyan] — remove refusal behavior")
+        console.print("  [cyan]5. python3 chat.py[/cyan]      — test your model")
+        console.print("  [cyan]6. python3 benchmark.py[/cyan]  — score it")
     else:
-        console.print("  [cyan]4. python3 chat.py[/cyan]         — test your model")
-        console.print("  [cyan]5. python3 benchmark.py[/cyan]    — score it")
+        console.print("  [cyan]4. python3 chat.py[/cyan]      — test your model")
+        console.print("  [cyan]5. python3 benchmark.py[/cyan]  — score it")
 
 
 if __name__ == "__main__":
