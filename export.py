@@ -13,9 +13,15 @@ Usage:
     python3 export.py                        # Convert to GGUF (Q8_0) and register with Ollama
     python3 export.py --quantize q4_k_m      # Use Q4_K_M quantization (smaller, faster)
     python3 export.py --quantize f16          # Full precision GGUF (largest, most accurate)
-    python3 export.py --name my-model         # Custom Ollama model name
+    python3 export.py --name my-model         # Custom Ollama model name (skips interactive prompt)
     python3 export.py --skip-ollama           # Only produce GGUF file, don't register with Ollama
     python3 export.py --ollama-only model.gguf  # Skip conversion, just register existing GGUF
+    python3 export.py --no-interactive        # Use default name without prompting (for scripting)
+
+Naming:
+    By default, the script proposes a name based on the model (e.g. "qwen2.5-0.5b-instruct-finetuned")
+    and prompts you to accept or type a custom name. Use --name to skip the prompt, or
+    --no-interactive to accept the default silently.
 """
 
 import argparse
@@ -174,7 +180,30 @@ def convert_to_gguf(quantize="q8_0"):
     return None
 
 
-def create_ollama_model(gguf_path, model_name=None):
+def prompt_model_name(proposed_name):
+    """Interactively ask the user to confirm or override the Ollama model name."""
+    console.print(f"\n[cyan]Proposed Ollama model name:[/cyan] [bold]{proposed_name}[/bold]")
+    console.print("[dim]Press Enter to accept, or type a custom name:[/dim]")
+    try:
+        user_input = input("  Model name: ").strip()
+    except (KeyboardInterrupt, EOFError):
+        console.print("\n[yellow]Cancelled.[/yellow]")
+        sys.exit(0)
+
+    if user_input:
+        # Sanitize: lowercase, replace spaces with hyphens, strip invalid chars
+        sanitized = user_input.lower().replace(" ", "-")
+        sanitized = "".join(c for c in sanitized if c.isalnum() or c in "-_.:").strip("-_.")
+        if sanitized != user_input.strip():
+            console.print(f"[dim]  (sanitized to: {sanitized})[/dim]")
+        if not sanitized:
+            console.print(f"[yellow]Invalid name, using default: {proposed_name}[/yellow]")
+            return proposed_name
+        return sanitized
+    return proposed_name
+
+
+def create_ollama_model(gguf_path, model_name=None, interactive=True):
     """Create an Ollama model from GGUF file or safetensors directory."""
     console.print(Rule("[bold cyan]Creating Ollama Model[/bold cyan]"))
 
@@ -183,9 +212,18 @@ def create_ollama_model(gguf_path, model_name=None):
         console.print(f"[red]✗ {msg}[/red]")
         return False
 
-    if model_name is None:
-        base_name = CFG["model"]["name"].split("/")[-1].lower()
-        model_name = f"{base_name}-finetuned"
+    # Build the default name
+    base_name = CFG["model"]["name"].split("/")[-1].lower()
+    default_name = f"{base_name}-finetuned"
+
+    if model_name is not None:
+        # Explicit --name flag: use it directly, no prompt
+        pass
+    elif interactive:
+        # No --name flag: propose the default and let the user override
+        model_name = prompt_model_name(default_name)
+    else:
+        model_name = default_name
 
     # Determine the FROM source
     if gguf_path == "direct_ollama":
@@ -315,13 +353,15 @@ def main():
     parser.add_argument("--quantize", "-q", type=str, default="q8_0",
                         help="Quantization type (default: q8_0)")
     parser.add_argument("--name", "-n", type=str, default=None,
-                        help="Ollama model name (default: <model>-finetuned)")
+                        help="Ollama model name (skips interactive prompt)")
     parser.add_argument("--skip-ollama", action="store_true",
                         help="Only create GGUF file, don't register with Ollama")
     parser.add_argument("--ollama-only", type=str, default=None, metavar="GGUF_PATH",
                         help="Skip conversion, register existing GGUF with Ollama")
     parser.add_argument("--list-quantizations", action="store_true",
                         help="Show available quantization types")
+    parser.add_argument("--no-interactive", action="store_true",
+                        help="Skip name prompt, use default name (for scripting)")
     args = parser.parse_args()
 
     if args.list_quantizations:
@@ -340,7 +380,7 @@ def main():
             console.print(f"[red]✗ GGUF file not found: {gguf_path}[/red]")
             return
         GGUF_DIR.mkdir(parents=True, exist_ok=True)
-        create_ollama_model(str(gguf_path), model_name=args.name)
+        create_ollama_model(str(gguf_path), model_name=args.name, interactive=not args.no_interactive)
         return
 
     # Full pipeline
@@ -360,7 +400,7 @@ def main():
 
     # Step 3: Register with Ollama
     if not args.skip_ollama:
-        create_ollama_model(gguf_path, model_name=args.name)
+        create_ollama_model(gguf_path, model_name=args.name, interactive=not args.no_interactive)
     else:
         console.print()
         console.print("[bold green]✓ GGUF export complete![/bold green]")
